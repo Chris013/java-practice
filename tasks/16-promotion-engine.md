@@ -102,7 +102,9 @@ The engine applies the promotions in this order:
 | 3 | Drinks deal (best of two) | 20% off drinks is 0.80; Juice 2 for 1 is 1.99, so it wins | 1.99 | 16.83 |
 | 4 | 5 off from 16 | Yes: 16.83 is at least 16.00 | 5.00 | 11.83 |
 
-The customer pays **11.83**. Now move "5 off from 20" to the last position. After step 3 the basket is 16.83, which is below 20.00, so the 5.00 does not apply and the customer pays **16.83**. The same promotions in a different order give a different receipt. That is the rule the engine must make visible.
+The customer pays **11.83**. The table uses 16.00 as the threshold, not 20.00, because with 20.00 in the last position the basket-level promotion would never apply and the example would show nothing.
+
+Now replace step 4 with "5 off from 20". In the last position it sees 16.83, which is below 20.00, so it does not apply and the customer pays **16.83**. Put the same "5 off from 20" in the first position instead: it sees the full 20.64, applies, and the line promotions still apply after it, so the customer pays **11.83**. The same promotions in a different order give a different receipt. That is the rule the engine must make visible.
 
 ## What I want from you
 
@@ -111,8 +113,9 @@ Implement the promotions, the `Basket` and the `PromotionEngine`. Some types are
 [`Category`](../src/main/java/io/github/chris013/practice/task16/Category.java),
 [`BasketLine`](../src/main/java/io/github/chris013/practice/task16/BasketLine.java),
 [`Discount`](../src/main/java/io/github/chris013/practice/task16/Discount.java),
-[`Receipt`](../src/main/java/io/github/chris013/practice/task16/Receipt.java) and
-[`Promotion`](../src/main/java/io/github/chris013/practice/task16/Promotion.java).
+[`Receipt`](../src/main/java/io/github/chris013/practice/task16/Receipt.java),
+[`Promotion`](../src/main/java/io/github/chris013/practice/task16/Promotion.java) and the package-private helper
+[`Cents`](../src/main/java/io/github/chris013/practice/task16/Cents.java), which holds the money rules.
 Read their validation before you start: it sets the money rules for everything else.
 
 1. **[`Basket`](../src/main/java/io/github/chris013/practice/task16/Basket.java)** is an immutable record with `lines`, `claimedSkus` and `discountSoFar`.
@@ -124,7 +127,7 @@ Read their validation before you start: it sets the money rules for everything e
    * The basket copies its collections, so changing the list you passed in does not change the basket.
 2. **[`PercentOffCategory`](../src/main/java/io/github/chris013/practice/task16/PercentOffCategory.java)(name, category, percent)** takes a percentage off every unclaimed line in one category.
    * `percent` must be from 1 to 100 (both inclusive), otherwise `IllegalArgumentException`.
-   * The amount is the sum of the eligible lines times `percent / 100`, rounded **once**, `HALF_UP`, to two decimals. Example: 0.50 for 10% is 0.005, which becomes 0.01.
+   * The amount is the sum of the eligible lines times `percent / 100`, rounded **once**, `HALF_UP`, to two decimals. Example: 10% of 0.05 is 0.005, which becomes 0.01.
    * It claims the SKUs of the lines it discounted.
    * If there are no eligible lines, or the rounded amount is 0.00, it returns empty. Nothing is claimed.
 3. **[`BuyXPayY`](../src/main/java/io/github/chris013/practice/task16/BuyXPayY.java)(name, sku, buy, pay)** gives free units on one product, for example "buy 3, pay for 2".

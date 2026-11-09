@@ -19,7 +19,7 @@ public record Basket(List<BasketLine> lines, Set<Sku> claimedSkus, BigDecimal di
     public Basket {
         lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
         claimedSkus = Set.copyOf(Objects.requireNonNull(claimedSkus, "claimedSkus"));
-        discountSoFar = Cents.of(Objects.requireNonNull(discountSoFar, "discountSoFar"), "discountSoFar");
+        discountSoFar = Cents.of(discountSoFar, "discountSoFar");
         if (discountSoFar.signum() < 0) {
             throw new IllegalArgumentException("discountSoFar cannot be negative, was " + discountSoFar);
         }

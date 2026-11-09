@@ -24,7 +24,7 @@ class BestOfTest {
 
         @Test
         void picks_the_option_with_the_highest_discount() {
-            // Juice 2 for 1 gives 1.99; 20% off drinks gives 0.80 and 10% off bakery gives 0.33.
+            // Juice 2 for 1 gives 1.99; 20% off drinks gives 0.80.
             BestOf drinksDeal = new BestOf("Drinks deal", List.of(drinksTwentyPercent, juiceTwoForOne));
 
             assertThat(drinksDeal.evaluate(basket)).hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("1.99"));

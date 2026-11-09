@@ -18,11 +18,11 @@ public final class SpendAndSave implements Promotion {
 
     public SpendAndSave(String name, BigDecimal threshold, BigDecimal amountOff) {
         this.name = Objects.requireNonNull(name, "name");
-        this.threshold = Cents.of(Objects.requireNonNull(threshold, "threshold"), "threshold");
+        this.threshold = Cents.of(threshold, "threshold");
         if (this.threshold.signum() < 0) {
             throw new IllegalArgumentException("threshold cannot be negative, was " + threshold);
         }
-        this.amountOff = Cents.of(Objects.requireNonNull(amountOff, "amountOff"), "amountOff");
+        this.amountOff = Cents.of(amountOff, "amountOff");
         if (this.amountOff.signum() <= 0) {
             throw new IllegalArgumentException("amountOff must be positive, was " + amountOff);
         }

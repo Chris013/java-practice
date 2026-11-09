@@ -37,7 +37,7 @@ class PromotionsTest {
             });
         }
 
-        // The category total is rounded once, half up: 0.50 / 100 = 0.005 becomes 0.01, 122.50 / 100 = 1.225 becomes 1.23.
+        // Rounded once, half up: 0.05 x 10 / 100 = 0.005 becomes 0.01, 2.45 x 50 / 100 = 1.225 becomes 1.23.
         @ParameterizedTest
         @CsvSource({"1.00, 33, 0.33", "0.05, 10, 0.01", "2.45, 50, 1.23"})
         void rounds_the_discount_half_up_to_cents(String unitPrice, int percent, String expected) {
@@ -77,6 +77,26 @@ class PromotionsTest {
                 assertThat(d.amount()).isEqualTo("0.09");
                 assertThat(d.claimedSkus()).containsExactly(ROLLS);
             });
+        }
+
+        @Test
+        void rounds_once_on_the_category_total_not_per_line() {
+            // 0.10 x 10% = 0.01 once; per line it would be 0.005 -> 0.01 twice = 0.02.
+            Basket basket = Basket.of(List.of(
+                    line(SOURDOUGH, Category.BAKERY, "0.05", 1),
+                    line(ROLLS, Category.BAKERY, "0.05", 1)));
+
+            assertThat(new PercentOffCategory("Off", Category.BAKERY, 10).evaluate(basket))
+                    .hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("0.01"));
+        }
+
+        @Test
+        void rounds_once_on_the_line_total_not_per_unit() {
+            // 0.15 x 10% = 0.015 -> 0.02; per unit it would be 0.005 -> 0.01 three times = 0.03.
+            Basket basket = Basket.of(List.of(line(SOURDOUGH, Category.BAKERY, "0.05", 3)));
+
+            assertThat(new PercentOffCategory("Off", Category.BAKERY, 10).evaluate(basket))
+                    .hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("0.02"));
         }
 
         @ParameterizedTest
@@ -185,8 +205,15 @@ class PromotionsTest {
                     .evaluate(afterDiscounts)).hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("5.00"));
         }
 
+        @Test
+        void gives_nothing_when_the_discount_would_be_zero() {
+            // The threshold is reached by an empty basket (0.00 >= 0.00), but min(5.00, 0.00) is 0.00: not a discount.
+            assertThat(new SpendAndSave("Free", BigDecimal.ZERO, new BigDecimal("5.00")).evaluate(Basket.of(List.of())))
+                    .isEmpty();
+        }
+
         @ParameterizedTest
-        @CsvSource({"20.00, 0.00", "-1.00, 5.00", "20.00, 5.001"})
+        @CsvSource({"20.00, 0.00", "-1.00, 5.00", "20.00, 5.001", "20.001, 5.00"})
         void rejects_a_negative_threshold_or_an_amount_that_is_not_a_positive_cent_value(String threshold, String amountOff) {
             assertThatThrownBy(() -> new SpendAndSave("Bad", new BigDecimal(threshold), new BigDecimal(amountOff)))
                     .isInstanceOf(IllegalArgumentException.class);

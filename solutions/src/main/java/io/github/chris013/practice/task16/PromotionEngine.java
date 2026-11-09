@@ -1,6 +1,5 @@
 package io.github.chris013.practice.task16;
 
-import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -36,9 +35,6 @@ public final class PromotionEngine {
                 basket = basket.after(discount.get());
             }
         }
-        BigDecimal subtotal = basket.subtotal();
-        BigDecimal discountTotal = applied.stream().map(Discount::amount).reduce(Cents.ZERO, BigDecimal::add);
-        BigDecimal total = subtotal.subtract(discountTotal).max(Cents.ZERO);
-        return new Receipt(subtotal, applied, total);
+        return new Receipt(basket.subtotal(), applied, basket.total().max(Cents.ZERO));
     }
 }

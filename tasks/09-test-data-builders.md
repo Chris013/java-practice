@@ -124,7 +124,7 @@ The starter has one test class, [`LegacyPremiumCalculatorTest`](../src/test/java
 ## Stretch goals
 
 1. Write one test that proves a neutral driver pays exactly the base premium for every coverage type. If it is hard to write, what does that say about your defaults?
-2. The rounding rule says "to cents, HALF_UP, once at the end". Can any combination of today's factors produce a fraction of a cent? Argue your answer in a short comment, and decide whether a test for the rounding is needed now or only when the e-car discount arrives.
+2. The rounding rule says "to cents, HALF_UP, once at the end". Find a combination of today's factors that produces a fraction of a cent, and check what the reference test expects for it. Then argue in a short comment what would change if we rounded after every factor instead, and decide whether the e-car discount needs a rounding test of its own.
 3. Make the builders immutable: each method returns a new builder instead of changing the old one. What does that cost in code, and what does it buy you in a test that reuses a half-built builder?
 4. The `PremiumCalculator` has no tests for `UninsurableException` messages. Should a test check the message text? Argue both sides and write your decision down.
 
@@ -139,17 +139,17 @@ The starter has one test class, [`LegacyPremiumCalculatorTest`](../src/test/java
 
 **1. Neutral defaults, and a test only mentions what it is about.** The default policyholder is 40 years old, licensed for 20 years, with no claims. The default car is 110 hp and worth 25,000 EUR. None of these triggers a rule, so `aPolicyholder().build()` with `LIABILITY` costs exactly 300.00. A test that changes one property shows the effect of that property alone. The alternative, a default with some risk in it, makes every test silently depend on that risk. Rejected: an Object Mother with named factory methods such as `youngDriver()`. It cannot combine properties without a new method for each combination.
 
-**2. Ages are relative to one policy start date.** `aged(30)` sets the birth date to `POLICY_START.minusYears(30)`, so the test says "a 30-year-old" and not a calendar date. `TestDates.POLICY_START` is one fixed date, 1 March 2026, that every test shares. Rejected: `LocalDate.now()`, which makes results depend on the day the tests run, and raw dates in every test, which hide the age the test is about behind a calendar.
+**2. Ages are relative to one policy start date.** `aged(30)` sets the birth date to `POLICY_START.minusYears(30)`, so the test says "a 30-year-old" and not a calendar date. `TestDates.POLICY_START` is one fixed date, 1 March 2026, that every test shares. Rejected: `LocalDate.now()`, which makes results depend on the day the tests run, and raw dates in every test, which hide the age the test is about behind a calendar. `aged(n)` always puts the birthday on the policy start, so it cannot reveal a bug about where in the year the birthday falls; the day-before boundary rows therefore use `bornOn` on purpose.
 
 **3. One rule per `@Nested` class.** The class names are the rule names (`Age`, `DrivingExperience`, `Claims`, `Horsepower`, `VehicleValue`). The reader can see the specification without reading the tests. A flat list of tests would hide which rule each test belongs to.
 
-**4. Boundary tables with real dates, on both sides of the boundary.** Each row says why it matters, and a failing row names the boundary. For ages, the rows use a birth date one day before and the birth date on the boundary day. Rejected: birth dates that are always 1 January. Those are the dates that make the age test easy to write, and they hide the bug below.
+**4. Boundary tables with real dates, on both sides of the boundary.** Each row says why it matters, and a failing row names the boundary. For ages, the table rows use `aged` on the boundary, and the day-before rows use a `bornOn` one day before the boundary. Rejected: birth dates that are always 1 January. Those are the dates that make the age test easy to write, and they hide the bug below.
 
 **5. The bug, and why the January 1st data hid it.** The legacy code computes age as `policyStart.getYear() - holder.birthDate().getYear()`. That subtracts calendar years and ignores whether the birthday has already happened. A driver born on 15 September 2001 is 24 on 1 March 2026, but the code says 25. The same mistake makes a 17-year-old born in September count as 18, and a 69-year-old count as 70. Every legacy test used birth dates of 1 January, and for those two methods always agree, so no test could see the difference. Experience was already computed with `Period.between`, which is correct, and that is why the two checks in the same method disagreed.
 
 **6. The one-line fix.** `Period.between(holder.birthDate(), policyStart).getYears()` counts complete years, the same rule the experience check uses. Rejected: subtracting by hand (`year - birthYear - (beforeBirthday ? 1 : 0)`), which is more code and easy to get wrong near month ends. `ChronoUnit.YEARS.between` gives the same answer; `Period` reads better next to the experience check.
 
-**7. Round once, at the end.** The factors and base premiums multiply exactly, and with today's numbers the product never needs more than two decimals, so rounding never changes a result yet. We still round once at the end. With a factor that has three decimals, such as a future e-car discount of × 0.975, rounding after each step would make the result depend on the order of the factors and could drift by cents. The test checks the scale, not a rounding case, because the current numbers cannot produce one.
+**7. Round once, at the end.** Today's factors can already produce a fraction of a cent. A 75-year-old with two years' licence, one claim and a 160 hp car on partial cover pays 420.00 × 1.20 × 1.30 × 1.20 × 1.20 = 943.488, and the reference test pins that to 943.49 with HALF_UP. Rounding once at the end keeps the result independent of the order of the factors. Rounding after each step can give different cents depending on the order, and the risk grows as more factors arrive. A future e-car discount of × 0.975 is an example of such a factor.
 
 ### Code
 
@@ -172,10 +172,10 @@ The starter has one test class, [`LegacyPremiumCalculatorTest`](../src/test/java
 
 | Finding | Why it matters |
 |---|---|
-| Builder defaults that trigger a rule (a 17-year-old, three claims, a 150 hp car) | Every test that uses the default is also testing that rule. A failure shows up in a test that looks unrelated, and the test stops being about one thing. |
+| Builder defaults that trigger a rule (a 17-year-old, three claims, a 160 hp car) | Every test that uses the default is also testing that rule. A failure shows up in a test that looks unrelated, and the test stops being about one thing. |
 | The full premium asserted in every test | Any change to any factor breaks every test. Assert the premium where the rule is about the premium; otherwise, let a neutral driver isolate the factor. |
 | Birthdays always on 1 January | This hides every bug that depends on the day within the year. The age rule has to be tested with birthdays on both sides of the policy start. |
-| Testing private methods such as `ageOn` | The tests break on every refactoring, while the actuaries care only about the public premium. |
+| Extracting a helper such as `ageOn(...)` and making it visible just to test it | The tests break on every refactoring, while the actuaries care only about the public premium. |
 | Random test data, or `LocalDate.now()` | A failure you cannot reproduce is worse than no test. Use fixed dates and named values. |
 | Changing an expected value to match the code's output | This is how a bug gets written into the test suite. Decide first which side is right, and write down why. |
 | Copy-pasted test bodies with small differences | Each copy can drift. The one copy that differs from the others is usually the one that matters, and nobody notices it. |

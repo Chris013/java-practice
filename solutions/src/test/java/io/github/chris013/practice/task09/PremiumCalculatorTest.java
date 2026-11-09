@@ -55,30 +55,47 @@ class PremiumCalculatorTest {
         @Test
         void drivers_under_18_are_uninsurable() {
             // 17 today, and 17 until the birthday tomorrow
-            assertThatThrownBy(() -> liabilityQuote(aPolicyholder().bornOn(LocalDate.parse("2008-03-02")).build()))
+            Policyholder holder = aPolicyholder().bornOn(POLICY_START.minusYears(18).plusDays(1)).build();
+
+            assertThatThrownBy(() -> liabilityQuote(holder))
                     .isInstanceOf(UninsurableException.class);
         }
 
         @ParameterizedTest
-        @ValueSource(strings = {"2008-09-15", "2010-01-01"})
-        void drivers_well_under_18_are_uninsurable(String birthDate) {
-            assertThatThrownBy(() -> liabilityQuote(aPolicyholder().bornOn(LocalDate.parse(birthDate)).build()))
+        @ValueSource(ints = {5, 16})
+        void drivers_well_under_18_are_uninsurable(int age) {
+            assertThatThrownBy(() -> liabilityQuote(aPolicyholder().aged(age).build()))
                     .isInstanceOf(UninsurableException.class);
         }
 
-        /** Births are given relative to the policy start, 2026-03-01. */
-        @ParameterizedTest(name = "born {0} pays {1}")
+        @ParameterizedTest(name = "aged {0} pays {1}")
         @CsvSource({
-            "2008-03-01, 450.00", // 18 today: insurable, young-driver factor
-            "2001-03-02, 450.00", // 24 until tomorrow
-            "2001-03-01, 300.00", // 25 today: the young-driver factor is gone
-            "1956-03-02, 300.00", // 69 until tomorrow
-            "1956-03-01, 360.00"  // 70 today: senior factor
+            "18, 450.00", // insurable from the 18th birthday: young-driver factor
+            "24, 450.00",
+            "25, 300.00", // the young-driver factor is gone on the 25th birthday
+            "69, 300.00",
+            "70, 360.00"  // senior factor from the 70th birthday
         })
-        void age_factor_follows_the_birthday_on_the_policy_start(String birthDate, String expected) {
-            BigDecimal premium = liabilityQuote(aPolicyholder().bornOn(LocalDate.parse(birthDate)).build());
+        void the_age_factor_follows_the_age_bands(int age, String expected) {
+            BigDecimal premium = liabilityQuote(aPolicyholder().aged(age).build());
 
             assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+
+        @Test
+        void the_young_driver_factor_still_applies_the_day_before_the_25th_birthday() {
+            // Born the day after 25 years before the policy start: 24 today, 25 tomorrow.
+            Policyholder holder = aPolicyholder().bornOn(POLICY_START.minusYears(25).plusDays(1)).build();
+
+            assertThat(liabilityQuote(holder)).isEqualTo(new BigDecimal("450.00")); // 300.00 x 1.50
+        }
+
+        @Test
+        void the_senior_factor_does_not_apply_the_day_before_the_70th_birthday() {
+            // Born the day after 70 years before the policy start: 69 today, 70 tomorrow.
+            Policyholder holder = aPolicyholder().bornOn(POLICY_START.minusYears(70).plusDays(1)).build();
+
+            assertThat(liabilityQuote(holder)).isEqualTo(new BigDecimal("300.00"));
         }
 
         @Test
@@ -90,7 +107,7 @@ class PremiumCalculatorTest {
         }
 
         @Test
-        void the_age_is_counted_on_the_policy_start_date_not_on_today() {
+        void the_age_is_measured_on_the_policy_start_date() {
             LocalDate birthDate = LocalDate.of(2001, 3, 1);
 
             BigDecimal beforeBirthday = calculator.annualPremium(
@@ -197,7 +214,7 @@ class PremiumCalculatorTest {
         void factors_multiply_together() {
             // 1.50 (age 24) x 1.30 (two years licensed) x 1.20 (one claim) x 1.40 (201 hp)
             Policyholder holder = aPolicyholder()
-                    .bornOn(LocalDate.of(2001, 3, 2))
+                    .aged(24)
                     .licensedForYears(2)
                     .withClaims(1)
                     .build();
@@ -205,6 +222,17 @@ class PremiumCalculatorTest {
             BigDecimal premium = quote(holder, aVehicle().withHorsepower(201).build(), Coverage.LIABILITY);
 
             assertThat(premium).isEqualTo(new BigDecimal("982.80")); // 300.00 x 3.276
+        }
+
+        @Test
+        void the_premium_is_rounded_to_cents_half_up() {
+            // 420.00 x 1.20 (age 75) x 1.30 (two years licensed) x 1.20 (one claim) x 1.20 (160 hp)
+            // = 943.488, which rounds to 943.49. Rounding down would give 943.48.
+            Policyholder holder = aPolicyholder().aged(75).licensedForYears(2).withClaims(1).build();
+
+            BigDecimal premium = quote(holder, aVehicle().withHorsepower(160).build(), Coverage.PARTIAL);
+
+            assertThat(premium).isEqualTo(new BigDecimal("943.49"));
         }
     }
 }

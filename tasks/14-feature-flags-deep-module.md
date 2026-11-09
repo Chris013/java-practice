@@ -46,7 +46,7 @@ flowchart TD
     Default -->|no| Off3[Return false]
 ```
 
-The order matters. The kill switch is checked before any rule, so a rule can never turn on a flag that was switched off. Rules are checked top to bottom. Only when none of them matches does the default apply.
+The order of the three steps matters. The kill switch is checked before any rule, so a rule can never turn on a flag that was switched off. Rules are checked top to bottom. Only when none of them matches does the default apply.
 
 Because every rule can only turn a flag on, the order of the rules never changes the answer. It only decides which line is responsible (useful for stretch goal 3) and lets evaluation stop early. The order that does matter is kill switch first, default last.
 

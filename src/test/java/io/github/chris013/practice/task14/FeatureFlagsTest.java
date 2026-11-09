@@ -48,6 +48,20 @@ class FeatureFlagsTest {
         }
 
         @Test
+        void lists_flag_names_in_the_order_they_are_written() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag zeta
+                      off
+                    flag alpha
+                      default on
+                    flag mid
+                      users alice
+                    """);
+
+            assertThat(flags.flagNames()).containsExactly("zeta", "alpha", "mid");
+        }
+
+        @Test
         void an_empty_configuration_has_no_flags() {
             FeatureFlags flags = FeatureFlags.parse("# nothing yet\n\n");
 

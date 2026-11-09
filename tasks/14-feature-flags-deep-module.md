@@ -48,6 +48,8 @@ flowchart TD
 
 The order matters. The kill switch is checked before any rule, so a rule can never turn on a flag that was switched off. Rules are checked top to bottom. Only when none of them matches does the default apply.
 
+Because every rule can only turn a flag on, the order of the rules never changes the answer. It only decides which line is responsible (useful for stretch goal 3) and lets evaluation stop early. The order that does matter is kill switch first, default last.
+
 ### Shallow versus deep
 
 The previous attempt had a shape like this one. Each box is a public class that a caller could in principle touch:
@@ -105,15 +107,11 @@ classDiagram
     class Rule {
         <<sealed package-private>>
     }
-    class Bucketing {
-        <<package-private>>
-    }
     FeatureFlags ..> EvaluationContext : asks
     FeatureFlags ..> FlagConfigurationException : throws
     FeatureFlags ..> FlagConfigParser : uses
     FeatureFlags ..> Flag : holds
     Flag o--> Rule : checks in order
-    Rule ..> Bucketing : percent rules use
 ```
 
 Count the public names in each design. Before: 14 classes, every one of them something a caller might need to understand. After: 3 types and 8 public methods in total. The second design does not do less. It does the same work, but the work is hidden.
@@ -169,7 +167,7 @@ Implement the module in the package `io.github.chris013.practice.task14`. Only t
    * `default on` or `default off`: what applies when no rule matched. At most one `default` line per flag. Without it the default is off.
    * `off` alone on a line is the **kill switch**. The flag is off for everyone, wherever the line appears in the block. `off` takes no value.
    * An empty list (`users`, `countries`) and an empty entry (`users alice,,bob`) are errors.
-6. **Evaluation order.** A flag is evaluated like this: if the kill switch is present, the answer is `false`. Otherwise the rules are tried top to bottom, and the first one that matches makes the answer `true`. If none matches, the default applies.
+6. **Evaluation order.** A flag is evaluated like this: if the kill switch is present, the answer is `false`. Otherwise the rules are tried top to bottom, and the first one that matches makes the answer `true`. If none matches, the default applies. Because every rule can only turn a flag on, the order of the rules never changes the answer. It only decides which line is responsible (useful for stretch goal 3) and lets evaluation stop early. The order that does matter is kill switch first, default last.
 7. **Unknown flags.** `isEnabled` with a flag name that is not in the configuration returns `false`. It never throws.
 8. **Errors.** Each of these is a `FlagConfigurationException` with the right line number and a message that names the problem:
    * an unknown keyword, for example `line 7: unknown keyword 'percentage'`;
@@ -257,7 +255,7 @@ The starter fails all of these tests, because every method throws `UnsupportedOp
 
 **2. `EvaluationContext` is a final class with two named factories.** A record `EvaluationContext(String userId, String country)` would have a canonical constructor that accepts `null` and blank strings, and it would tempt callers to write `new EvaluationContext(null, null)`. Two factories say exactly what the situation is: a known user, or an anonymous visitor. Nulls are stored in one private constructor and never reach a caller. The accessors return `Optional`, so the caller must decide what "unknown" means at the point of use.
 
-**3. Unknown flags return `false`.** This is the define-errors-out-of-existence move from APOSD ch. 10. A caller who asks about a flag that is not in the configuration does not have to handle an exception: it gets the answer "off", which is the safe answer for a feature. It is safe here because the only flags that could be missing are flags that someone has just removed, and the old code path should be off in that case anyway.
+**3. Unknown flags return `false`.** This is the define-errors-out-of-existence move from APOSD ch. 10. A caller who asks about a flag that is not in the configuration does not have to handle an exception: it gets the answer "off", which is the safe answer for a feature. It is safe here because `false` always selects the old, proven code path: whether the flag was removed, not yet added, or misspelled, the worst case is that a new feature stays hidden.
 It would not be safe when the default answer must not be silent. For a flag that guards a payment path or a data migration, a typo in the name would quietly send everybody down the old path with no alarm. For such flags, the caller should check `flagNames()` at start-up, or the team should test that the flag names exist. The alternative, throwing `FlagNotFoundException`, pushes a try/catch into every caller, which is exactly the complexity this module is meant to hide.
 
 **4. The parser keeps the line number, and only one helper creates errors.** Every error is built by `error(detail)`, which reads the current line number from the parser state. That makes it impossible to report an error with the wrong number, and it means the parser does not need to pass a line number around. We stop at the first error, because a person fixing a file usually fixes one problem at a time, and a clear first error is easier to act on than a list that might cascade. Collecting all errors is a fine stretch goal, but it costs more code.
@@ -268,9 +266,9 @@ It would not be safe when the default answer must not be silent. For a flag that
 
 **7. Anonymous visitors never match a percentage.** An anonymous visitor has no id, so there is nothing stable to hash. Giving them a random bucket on each request would flip them in and out of the feature between two page loads, which is worse than leaving them out. The right fix is to give anonymous visitors a stable id (for example a cookie) and pass it as a user. That is a decision for the caller, and the module keeps its promise of stable answers.
 
-**8. Sealed `Rule` with a method on each record.** Each rule record implements `matches(context, flagName)`. The behaviour is next to the data it uses. `sealed` does not add much at runtime today: the methods do the work. It does mean that a future `switch` over rule kinds, for example an `explain` method, is checked by the compiler when a new kind is added. The alternative, one large `switch` in the evaluator, would have worked too. It would have kept the records as plain data, which is a fair choice, and we would move to it if the rules started to need different context.
+**8. Sealed `Rule` with a method on each record, and only the rule that needs the flag name gets it.** Each rule record implements `matches(context)`. The behaviour is next to the data it uses. Only `PercentRule` needs the flag name, because its bucket depends on it, so only `PercentRule` carries the name. The rejected alternative was to pass the flag name to every rule. `UserRule` and `CountryRule` would then receive a value they never use, and every future rule would inherit that parameter. That is information leakage in the APOSD sense (ch. 5): a part of the module knows a detail it does not need. `sealed` does not add much at runtime today: the methods do the work. It does mean that a future `switch` over rule kinds, for example an `explain` method, is checked by the compiler when a new kind is added. The alternative, one large `switch` in the evaluator, would have worked too. It would have kept the records as plain data, which is a fair choice, and we would move to it if the rules started to need different context.
 
-**9. `FeatureFlags` is immutable and shared.** `parse` builds the whole map and never changes it. `flagNames` returns a copy. Reads need no locks and every request thread can share one instance. This is *Effective Java* Item 15 in practice. Reloads create a new instance (see stretch goal 1) instead of mutating the one in use.
+**9. `FeatureFlags` is immutable and shared.** `parse` builds the whole map and never changes it. `flagNames` returns an unmodifiable view of the names, in the order they are written in the configuration. Reads need no locks and every request thread can share one instance. This is *Effective Java* Item 15 in practice. Reloads create a new instance (see stretch goal 1) instead of mutating the one in use.
 
 ### Code
 
@@ -290,9 +288,6 @@ It would not be safe when the default answer must not be silent. For a flag that
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/PercentRule.java -->
-<!-- /embed -->
-
-<!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/Bucketing.java -->
 <!-- /embed -->
 
 ### What I typically flag in first attempts

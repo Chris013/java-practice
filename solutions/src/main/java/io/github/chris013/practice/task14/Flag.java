@@ -9,7 +9,7 @@ import java.util.List;
  * rules are tried top to bottom; the first one that matches turns the flag on. Only if none matches does the
  * default apply.
  */
-record Flag(String name, boolean killSwitch, boolean defaultOn, List<Rule> rules) {
+record Flag(boolean killSwitch, boolean defaultOn, List<Rule> rules) {
 
     Flag {
         rules = List.copyOf(rules);
@@ -20,7 +20,7 @@ record Flag(String name, boolean killSwitch, boolean defaultOn, List<Rule> rules
             return false;
         }
         for (Rule rule : rules) {
-            if (rule.matches(context, name)) {
+            if (rule.matches(context)) {
                 return true;
             }
         }

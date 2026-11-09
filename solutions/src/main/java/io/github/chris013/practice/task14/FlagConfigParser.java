@@ -5,7 +5,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -81,9 +80,9 @@ final class FlagConfigParser {
         }
         String argument = words.argument();
         switch (words.keyword()) {
-            case "users" -> current.rules.add(new UserRule(Set.copyOf(listOf("users", argument))));
-            case "countries" -> current.rules.add(new CountryRule(Set.copyOf(countryCodes(argument))));
-            case "percent" -> current.rules.add(new PercentRule(percent(argument)));
+            case "users" -> current.rules.add(new UserRule(listOf("users", argument)));
+            case "countries" -> current.rules.add(new CountryRule(countryCodes(argument)));
+            case "percent" -> current.rules.add(new PercentRule(current.name, percent(argument)));
             case "default" -> setDefault(argument);
             case "off" -> killSwitch(argument);
             case "flag" -> throw error("flag lines must not be indented");
@@ -179,7 +178,7 @@ final class FlagConfigParser {
         }
 
         Flag build() {
-            return new Flag(name, killSwitch, defaultOn, rules);
+            return new Flag(killSwitch, defaultOn, rules);
         }
     }
 }

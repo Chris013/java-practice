@@ -6,6 +6,6 @@ package io.github.chris013.practice.task14;
  */
 sealed interface Rule permits UserRule, CountryRule, PercentRule {
 
-    /** Whether this rule turns the flag on for the context. {@code flagName} is needed for percentage buckets. */
-    boolean matches(EvaluationContext context, String flagName);
+    /** Whether this rule turns the flag on for the context. */
+    boolean matches(EvaluationContext context);
 }

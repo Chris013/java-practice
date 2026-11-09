@@ -1,5 +1,6 @@
 package io.github.chris013.practice.task14;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -44,8 +45,10 @@ public final class FeatureFlags {
         return flag != null && flag.isOnFor(context);
     }
 
-    /** The names of all flags in the configuration. */
+    /**
+     * The names of all flags in the configuration, in the order they are written. The set cannot be modified.
+     */
     public Set<String> flagNames() {
-        return Set.copyOf(flags.keySet());
+        return Collections.unmodifiableSet(flags.keySet());
     }
 }

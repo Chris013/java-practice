@@ -163,7 +163,7 @@ The time is always controlled by [`MutableInstantSource`](../src/test/java/io/gi
 
 1. Make `tryConsume` tell the caller how long to wait: `Optional<Duration> retryAfter`, or a small sealed type `Granted` / `Refused(Duration retryAfter)`. The HTTP `Retry-After` header needs that number. How do you compute it exactly, given the remainder rule?
 2. Evict idle buckets. Each key that goes quiet keeps a bucket in memory forever. Remove a bucket once it has been full for a full period. Which operation is safe to race with `tryAcquire`, and which is not?
-3. Add a blocking `acquire(K key)` that waits until a token is available. With virtual threads, waiting is cheap. Inject the waiting as well, for example a small `Sleeper` interface, or a `Condition`/`LockSupport.park` that the test wakes up after moving the fake time. In production, sleeping or parking on a virtual thread is cheap. Test it without real waiting: the test should show the call is blocked until the fake time moves, and then returns.
+3. Add a blocking `acquire(K key)` that waits until a token is available. Inject the waiting as well, for example a small `Sleeper` interface, or a `Condition`/`LockSupport.park` that the test wakes up after moving the fake time. In production, sleeping or parking on a virtual thread is cheap. Test it without real waiting: the test should show the call is blocked until the fake time moves, and then returns.
 4. Read the source or the documentation of Guava's `RateLimiter` and Bucket4j. Both are real libraries. Which algorithm does each use: a token bucket, or a leaky bucket? Which one allows bursts? In what cases would you rather use a library than your own 100 lines?
 
 ---
@@ -196,6 +196,7 @@ private final Object lock = new Object();   // guards tokens and refilledAt
 private long tokens;
 private Instant refilledAt;
 
+// checkTokens and refillLocked: the same validation and refill rule as in the CAS version, without the AtomicReference
 public boolean tryConsume(long tokens) {
     checkTokens(tokens);
     synchronized (lock) {

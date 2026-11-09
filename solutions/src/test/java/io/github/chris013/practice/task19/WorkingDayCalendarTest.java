@@ -74,6 +74,7 @@ class WorkingDayCalendarTest {
             "2000, 2000-04-23",
             "2024, 2024-03-31",
             "2025, 2025-04-20",
+            "2008, 2008-03-23",
             "2026, 2026-04-05",
             "2027, 2027-03-28",
             "2038, 2038-04-25",
@@ -132,6 +133,12 @@ class WorkingDayCalendarTest {
 
             assertThat(GERMANY.holidayOn(unityDay)).contains("German Unity Day");
             assertThat(GERMANY.isWorkingDay(unityDay)).isFalse();
+        }
+
+        @Test
+        void a_date_with_two_holidays_is_named_by_the_first_one_in_calendar_order() {
+            // In 2008 Ascension Day and Labour Day are both 1 May. National holidays come first in the list.
+            assertThat(GERMANY.holidayOn(LocalDate.of(2008, 5, 1))).contains("Labour Day");
         }
 
         @Test
@@ -263,6 +270,12 @@ class WorkingDayCalendarTest {
         }
 
         @Test
+        void lists_a_date_once_when_two_holidays_fall_on_it() {
+            // Easter 2008 was 23 March, so Ascension Day (+39) fell on Labour Day, 1 May.
+            assertThat(GERMANY.holidaysIn(2008)).hasSize(8).containsOnlyOnce(LocalDate.of(2008, 5, 1));
+        }
+
+        @Test
         void lists_holidays_in_date_order_including_those_on_weekends() {
             assertThat(GERMANY.holidaysIn(2026)).hasSize(9).isSorted().contains(LocalDate.of(2026, 10, 3));
         }
@@ -277,6 +290,18 @@ class WorkingDayCalendarTest {
             assertThatThrownBy(() -> GERMANY.holidayOn(null)).isInstanceOf(NullPointerException.class);
             assertThatThrownBy(() -> GERMANY.addWorkingDays(null, 1)).isInstanceOf(NullPointerException.class);
             assertThatThrownBy(() -> WorkingDayCalendar.germany(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> GERMANY.workingDaysBetween(null, LocalDate.of(2026, 3, 9)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> GERMANY.workingDaysBetween(LocalDate.of(2026, 3, 2), null))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new EasterBasedHoliday(null, 1)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void dates_before_1583_are_rejected_because_easter_is_undefined_there() {
+            // 2 January, not 1 January: New Year's Day is listed first and matches 1 January before Easter is asked.
+            assertThatThrownBy(() -> GERMANY.isWorkingDay(LocalDate.of(1500, 1, 2)))
+                    .isInstanceOf(IllegalArgumentException.class);
         }
     }
 }

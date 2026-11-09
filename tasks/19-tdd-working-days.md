@@ -34,6 +34,7 @@ classDiagram
         +germany() WorkingDayCalendar
         +germany(GermanState) WorkingDayCalendar
         +isWorkingDay(LocalDate) boolean
+        +holidayOn(LocalDate) Optional
         +addWorkingDays(LocalDate, int) LocalDate
         +workingDaysBetween(LocalDate, LocalDate) long
         +holidaysIn(int) List
@@ -79,11 +80,11 @@ gantt
     Tue 31 Mar       :active, d2, 2026-03-31, 1d
     Wed 1 Apr        :active, d3, 2026-04-01, 1d
     Thu 2 Apr        :active, d4, 2026-04-02, 1d
+    Tue 7 Apr        :active, d5, 2026-04-07, 1d
     section Not working
     Good Friday      :crit, h1, 2026-04-03, 1d
     Sat and Sun      :h2, 2026-04-04, 2d
     Easter Monday    :crit, h4, 2026-04-06, 1d
-    Tue 7 Apr        :active, d5, 2026-04-07, 1d
 ```
 
 ## What I want from you
@@ -120,15 +121,15 @@ Implement the calendar in the starter. The types are in [`src/main/java/io/githu
    | `BERLIN` | International Women's Day (8 March) |
    | `NORTH_RHINE_WESTPHALIA` | Corpus Christi (Easter plus 60 days), All Saints' Day (1 November) |
 
-7. **`isWorkingDay(date)`** is true if the date is a Monday to Friday and no holiday of this calendar falls on it.
+7. **`isWorkingDay(date)`** is true if the date is a Monday to Friday and no holiday of this calendar falls on it. Easter-based holidays cannot be computed before 1583, so for a date in an earlier year the calendar throws `IllegalArgumentException` once it has to check an Easter-based holiday. A 1 January date is the exception, because New Year's Day matches first and the check stops there.
 
-8. **`holidayOn(date)`** returns the name of the holiday on that date, or an empty `Optional`. A holiday on a Saturday or Sunday still has a name. Example: German Unity Day 2026 is a Saturday, and `holidayOn` still names it.
+8. **`holidayOn(date)`** returns the name of the holiday on that date, or an empty `Optional`. A holiday on a Saturday or Sunday still has a name. Example: German Unity Day 2026 is a Saturday, and `holidayOn` still names it. If two holidays fall on the same date, it returns the first one in calendar order: the nationwide holidays come first, then the state holidays in the order `germany(state)` adds them.
 
 9. **`addWorkingDays(start, days)`** returns the date reached after `days` working days. The count starts **after** `start`. Thursday 2 April 2026 plus 3 working days is Thursday 9 April 2026. If `days` is negative, throw `IllegalArgumentException`. If `days` is `0`, return `start` when it is a working day, otherwise the next working day.
 
 10. **`workingDaysBetween(startInclusive, endExclusive)`** counts the working days in that half-open range. Equal dates give `0`. If the end is before the start, throw `IllegalArgumentException`.
 
-11. **`holidaysIn(year)`** returns the holiday dates of that year, in date order and without duplicates. It includes holidays that fall on a weekend.
+11. **`holidaysIn(year)`** returns the holiday dates of that year, in date order and without duplicates. It includes holidays that fall on a weekend. Two holidays can share a date: in 2008 Ascension Day (Easter plus 39 days, with Easter on 23 March) and Labour Day are both 1 May, so the list shows that date once and `holidaysIn(2008)` has eight entries.
 
 12. Any `null` argument throws `NullPointerException` with the parameter name, for example `Objects.requireNonNull(date, "date")`.
 
@@ -143,6 +144,20 @@ Implement the calendar in the starter. The types are in [`src/main/java/io/githu
 * **Only the three states from the enum.** Adding the other 13 is a stretch goal, not part of this task.
 
 ## How I'd approach it
+
+Every cycle has the same four steps, and the loop ends when the list is empty:
+
+```mermaid
+flowchart LR
+    L[Pick next item from the test list] --> R[Red: write one failing test]
+    R --> G[Green: simplest code that passes]
+    G --> F[Refactor: remove duplication while green]
+    F --> Q{List empty}
+    Q -- no --> L
+    Q -- yes --> A[Run the acceptance test]
+```
+
+Keep the steps separate. Red proves that the test can fail and that it talks about new behaviour, so a green bar later means something. Green lets you write the dumbest code that works, which keeps the design honest, because you cannot yet guess what the code needs. Refactor is allowed only while the bar is green, so every change in it is a change of structure and not of behaviour. If you mix them, a failure tells you nothing about which step caused it.
 
 **Start with a test list, not with a test.** Write the list on paper or in a comment, one behaviour per line. Do not write the algorithm in the list. Here is a starting list. It will grow, and you will cross items off as you go:
 
@@ -252,9 +267,9 @@ The unit tests, in the order a TDD session produces them. They are a second refe
 
 1. `WeekdaysAndWeekends`: Monday to Friday are working days, Saturday and Sunday are not.
 2. `FixedDates`: a fixed holiday repeats every year, 29 February is empty in a non-leap year, null checks.
-3. `EasterSunday`: triangulation with nine years from four centuries, which no constant or small table can satisfy.
+3. `EasterSunday`: triangulation with ten years from four centuries, which no constant or small table can satisfy.
 4. `EasterOffsets`: Good Friday is `-2`, and the other offsets of the national table.
-5. `NationalHolidays`: each holiday is named on its date, and a weekend holiday is still named.
+5. `NationalHolidays`: each holiday is named on its date, a weekend holiday is still named, and a date with two holidays gets the first one in calendar order.
 6. `StateHolidays`: each state adds its own holidays, and Corpus Christi differs between Bavaria and Berlin.
 7. `AddingWorkingDays`, `CountingWorkingDays`, `HolidaysInYear` and `ArgumentChecks`: the counting rules, the whole-year totals per state, and the null checks.
 

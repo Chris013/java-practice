@@ -16,6 +16,9 @@ import java.util.Optional;
  * <p>Holidays are data, not code: each calendar holds an immutable list of {@link Holiday} rules, so two calendars
  * never share state and the holiday rules can be read in one place. The holiday rules are fixed for the life of
  * the object, so every method is a pure function of its arguments.
+ *
+ * <p>Easter is undefined before 1583. A date in an earlier year is rejected with {@code IllegalArgumentException}
+ * when the calendar has to check an Easter-based holiday for it.
  */
 public final class WorkingDayCalendar {
 
@@ -102,8 +105,8 @@ public final class WorkingDayCalendar {
             }
             return date;
         }
-        // Walk forward one day at a time. The loop always ends: there is a working day at least every few days,
-        // and LocalDate throws DateTimeException at the end of the supported range.
+        // Walk forward one day at a time. The loop ends: a working day comes at least every few days, and
+        // LocalDate throws DateTimeException at the end of its range instead of wrapping around.
         int counted = 0;
         while (counted < days) {
             date = date.plusDays(1);

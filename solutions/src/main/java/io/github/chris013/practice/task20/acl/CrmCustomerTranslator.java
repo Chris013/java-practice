@@ -124,7 +124,8 @@ final class CrmCustomerTranslator {
         try {
             return Optional.of(LocalDate.parse(value, GEBDAT_FORMAT));
         } catch (DateTimeParseException e) {
-            // STRICT resolving rejects 31.02.1980 instead of quietly turning it into 03.03.1980.
+            // STRICT resolving rejects 31.02.1980 instead of quietly turning it into 29.02.1980 (SMART)
+            // or 02.03.1980 (LENIENT).
             throw corrupt(id, "GEBDAT", "invalid GEBDAT '%s'".formatted(value), e);
         }
     }

@@ -17,6 +17,7 @@ import io.github.chris013.practice.task20.domain.CustomerStatus;
 import io.github.chris013.practice.task20.domain.EmailAddress;
 import io.github.chris013.practice.task20.domain.PrivateCustomer;
 import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -164,12 +165,19 @@ class CrmCustomerDirectoryTest {
 
         @Test
         void a_date_that_does_not_exist_is_corrupt_and_not_moved_to_march() {
-            // Lenient parsing would turn 31.02.1980 into 03.03.1980 without a word.
+            // Lenient parsing would turn 31.02.1980 into 02.03.1980, smart parsing into 29.02.1980.
             CrmRecords record = aPrivateCustomerRecord().with("GEBDAT", "31.02.1980");
 
             assertThatThrownBy(() -> lookup(record))
                     .isInstanceOfSatisfying(CorruptCustomerDataException.class,
                             e -> assertThat(e.field()).isEqualTo("GEBDAT"));
+        }
+
+        @Test
+        void keeps_the_date_parse_problem_as_the_cause() {
+            CrmRecords record = aPrivateCustomerRecord().with("GEBDAT", "31.02.1980");
+
+            assertThatThrownBy(() -> lookup(record)).hasCauseInstanceOf(DateTimeParseException.class);
         }
     }
 
@@ -210,7 +218,7 @@ class CrmCustomerDirectoryTest {
         @ParameterizedTest
         @CsvSource({
             "'',0.00", "'0,5',0.50", "'1234',1234.00", "'1234,5',1234.50",
-            "'1.234,56',1234.56", "'1.234.567,00',1234567.00"
+            "'1.234,56',1234.56", "'1.234.567,00',1234567.00", "'1.234',1234.00"
         })
         void reads_the_german_number_format_with_two_decimals(String raw, String expected) {
             CrmRecords record = aPrivateCustomerRecord().with("KREDITLIMIT", raw);
@@ -239,7 +247,9 @@ class CrmCustomerDirectoryTest {
             "PLZ,123", "PLZ,ABCDE", "PLZ,1011", "PLZ,''",
             "NAME1,''", "NAME2,''",
             "GEBDAT,31.02.1980", "GEBDAT,29.02.2023", "GEBDAT,1980-12-31", "GEBDAT,32.01.1980",
-            "KREDITLIMIT,abc", "KREDITLIMIT,'1.234,56abc'"
+            "KREDITLIMIT,abc", "KREDITLIMIT,'1.234,56abc'",
+            "KREDITLIMIT,1234.56", "KREDITLIMIT,'1,234'", "KREDITLIMIT,'1.23,00'", "KREDITLIMIT,'12.34'",
+            "KREDITLIMIT,'-5,00'", "KREDITLIMIT,'1 234,56'"
         })
         void names_the_legacy_field_and_the_customer(String field, String value) {
             CrmRecords record = aPrivateCustomerRecord().with(field, value);
@@ -307,6 +317,13 @@ class CrmCustomerDirectoryTest {
         @Test
         void rejects_a_missing_client() {
             assertThatThrownBy(() -> new CrmCustomerDirectory(null)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void rejects_a_missing_id() {
+            CrmCustomerDirectory directory = new CrmCustomerDirectory(new FakeLegacyCrmClient());
+
+            assertThatThrownBy(() -> directory.findById(null)).isInstanceOf(NullPointerException.class);
         }
     }
 }

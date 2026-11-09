@@ -25,7 +25,7 @@ So we put a **translation layer at the border**. Only the layer knows the CRM. E
 | **Legacy record** | `CrmCustomerRecord`: one row from the CRM, text fields, no rules. Owned by the CRM. |
 | **Customer** | Our model: a sealed interface with two cases, `PrivateCustomer` and `BusinessCustomer`. |
 | **Port** | `CustomerDirectory`: the interface our loyalty context uses. It speaks only domain language. |
-| **Anti-corruption layer (ACL)** | The package `acl`: it implements the port and translates in both directions, so the CRM model never crosses the border. |
+| **Anti-corruption layer (ACL)** | The package `acl`: it implements the port and translates the CRM model into ours, so the CRM model never crosses the border. |
 | **Corrupt data** | The CRM has a customer, but one field cannot be turned into a valid value. Retrying does not help. |
 | **Unavailable** | The CRM cannot answer right now (timeout, connection, auth). Retrying may help. |
 
@@ -49,7 +49,9 @@ classDiagram
         +String TYP
         +String NAME1
         +String NAME2
+        +String STRASSE
         +String PLZ
+        +String ORT
         +String LAND
         +String STATUS
         +String GEBDAT
@@ -122,7 +124,7 @@ Implement the directory and its translator. The domain types, the CRM types and 
    * `CH`: `CH`, `CHE`, `Schweiz`, `SWITZERLAND`.
    * Empty means `DE`. Anything else: corrupt, field `LAND`.
 7. `PLZ` is checked by [`Address`](../src/main/java/io/github/chris013/practice/task20/domain/Address.java). When `Address` rejects it, throw corrupt with field `PLZ`, and keep the `IllegalArgumentException` as the cause. A German code with 4 digits, or an Austrian code with 5 digits, is corrupt.
-8. `GEBDAT` is read only for `TYP` `P`. Empty or `00.00.0000` gives `Optional.empty()`. Any other value must be a real date in the `dd.MM.uuuu` format, read strictly: `31.02.1980` is corrupt with field `GEBDAT`, not March 3rd.
+8. `GEBDAT` is read only for `TYP` `P`. Empty or `00.00.0000` gives `Optional.empty()`. Any other value must be a real date in the `dd.MM.uuuu` format, read strictly: `31.02.1980` is corrupt with field `GEBDAT`, not 29 February or 2 March.
 9. `EMAIL` is split on `;`. Each part is trimmed, and the first part that [`EmailAddress`](../src/main/java/io/github/chris013/practice/task20/domain/EmailAddress.java) accepts wins. If none does, the result is empty. Junk is **not** corruption.
 10. `KREDITLIMIT` uses the German number format. Empty means `0.00`. The result has scale 2, so `1234` gives `1234.00`. A negative or unparsable value is corrupt with field `KREDITLIMIT`.
 11. For `P`: `NAME1` (last name) and `NAME2` (first name) must both be non-blank. For `F`: `NAME1` must be non-blank, and a blank `NAME2` gives no contact person.
@@ -145,10 +147,10 @@ Implement the directory and its translator. The domain types, the CRM types and 
 * **Exception translation** (*Effective Java* Item 73). The CRM's `CrmException` is an infrastructure detail. Callers of the port should see `CustomerDirectoryUnavailableException`, which says what happened in our language. Do not throw away the cause: the CRM error code and the stack trace are what the on-call engineer needs.
 * **Why junk e-mails are ignored and a junk PLZ is corruption.** This is a business decision, and you should be able to defend it. A customer without an e-mail address can still get the loyalty newsletter by post. A customer without a valid postal code cannot receive a parcel. Ask yourself: "is this record usable?" If the answer is no, it is corrupt.
 * **Why the translator is package-private.** The only public face of the ACL is the port implementation. If another class could call `toDomain` directly with a record it got from somewhere else, it would skip the exception translation and the port's contract. Keep the surface as small as possible.
-* **German numbers.** `NumberFormat.getInstance(Locale.GERMAN).parse("1.234,56abc")` succeeds and returns 1234.56: it stops at the first character it does not understand. For money, use a strict regex like the one in the solution, or `ParsePosition` and check that the whole string was consumed.
-* **Dates.** `DateTimeFormatter` with `ResolverStyle.STRICT` rejects `31.02.1980`. The default `SMART` style does not reject it: it clamps the day to the last valid day of the month. `LENIENT` rolls it over to 03.03.1980. Read the Javadoc of `ResolverStyle` before you choose.
+* **German numbers.** `NumberFormat.getInstance(Locale.GERMAN).parse("1.234,56abc")` succeeds and returns 1234.56: it stops at the first character it does not understand. For money, use a strict regex that must match the whole string, or `ParsePosition` and check that the whole string was consumed.
+* **Dates.** `DateTimeFormatter` with `ResolverStyle.STRICT` rejects `31.02.1980`. `LENIENT` rolls it over to 02.03.1980 (1980 is a leap year), and `SMART` clamps it to 29.02.1980. Only `STRICT` rejects it. Read the Javadoc of `ResolverStyle` before you choose.
 * **The `Optional` boundary.** `Optional` is good as a return type and as a record component that means "may be absent" (`birthDate`). It is bad as a field, a parameter, or inside a collection. Your translator returns `Optional`; it does not take one.
-* **Where the ACL lives.** In hexagonal terms (ports and adapters, covered in task 10 of this series) the `CustomerDirectory` interface is a port that belongs to the loyalty context. The ACL is an adapter: it implements that port and points outwards to the CRM. The dependency arrow points inwards, from the adapter to the domain, and never from the domain to the CRM.
+* **Where the ACL lives.** In hexagonal terms (ports and adapters, covered in [task 10](10-library-lending-hexagonal.md) of this series) the `CustomerDirectory` interface is a port that belongs to the loyalty context. The ACL is an adapter: it implements that port and points outwards to the CRM. The dependency arrow points inwards, from the adapter to the domain, and never from the domain to the CRM.
 * `Stream.flatMap(Optional::stream)` (Java 9+) turns a stream of optionals into a stream of values. It is a good fit for "first valid e-mail".
 
 ## Tests
@@ -187,6 +189,7 @@ Run: `mvn test -Dtest='**/task20/**'`
 2. **Write-back.** Write a translator in the other direction, from `Customer` to a `CrmCustomerRecord`, for when the loyalty context changes a customer. Which domain values cannot be written back exactly? Think about `KREDITLIMIT` and `GEBDAT` for businesses.
 3. **Caching with a TTL.** Wrap the directory in a cache with a time to live, as in [task 07](07-exchange-rate-decorators.md). Should a `CustomerDirectoryUnavailableException` be cached? Should `Optional.empty()` be cached?
 4. **Metrics for corrupt records.** Instead of throwing for a corrupt record, count it per field and return it as "not usable". What do callers lose? What do operations gain? When would you still throw?
+5. **Check the key.** A stricter ACL compares the stripped `KUNDNR` of the record with `id.value()`. If they differ, the CRM returned a record for another customer or is confused, so report it as corrupt with field `KUNDNR`. Why is it worth checking at all, when we already ignore the record's `KUNDNR`?
 
 ---
 
@@ -201,7 +204,7 @@ Run: `mvn test -Dtest='**/task20/**'`
 
 **2. Value types validate themselves.** `CustomerId`, `Address` and `EmailAddress` reject bad values in their constructors. The translator therefore only has to convert text and map codes. It does not repeat the postal-code rule: it calls `new Address(...)` and translates the `IllegalArgumentException` into a corrupt-data exception with the legacy field name. One rule, one place.
 
-**3. The requested id is the customer's identity.** `toDomain` takes the `CustomerId` we asked for, and it ignores the record's `KUNDNR`. Re-parsing a value we already know invites a second failure path that has nothing to do with the customer data. The alternative, reading `KUNDNR` from the record, was rejected for this reason.
+**3. The requested id is the customer's identity.** `toDomain` takes the `CustomerId` we asked for, and it ignores the record's `KUNDNR`. The real reason is that `CorruptCustomerDataException` needs a valid `CustomerId` to say which customer is broken, and we already have one: the id we asked for, which `CustomerId` has checked. If we read `KUNDNR` from the record instead, a junk value would fail before we know which customer we are dealing with, and the exception would have no id to carry.
 
 **4. Two kinds of bad data.** A junk e-mail is dropped silently, because a customer is still usable without one. A junk postal code or status is corruption, because the record cannot be used. The line between the two is "can the loyalty program act on this customer?", and that answer is a business decision, so it is written down in the code comments and in the tests.
 

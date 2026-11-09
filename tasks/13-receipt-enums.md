@@ -47,7 +47,7 @@ classDiagram
     class Receipt {
         +List~LineItem~ items()
         +BigDecimal totalGross()
-        +Map~VatRate, VatLine~ vatBreakdown()
+        +Map vatBreakdown()
         +OptionalInt minimumAgeToVerify()
         +Set~Category~ categories()
     }
@@ -66,7 +66,7 @@ classDiagram
     class VatRate {
         +char code()
         +int percent()
-        +fromCode(char) VatRate
+        +fromCode(char)$ VatRate
     }
     class VatLine {
         +VatRate rate()
@@ -102,7 +102,7 @@ A      19 %    5.99      1.14           7.13
 B       7 %    3.90      0.27           4.17
 ```
 
-Notice that the `B` rows add up to 4.17 (1.99 + 2.18), and the `A` rows to 7.13 (5.34 + 1.79). The VAT is worked out for each row, not for each product.
+Notice that the `B` rows add up to 4.17 (1.99 + 2.18), and the `A` rows to 7.13 (5.34 + 1.79). The VAT is worked out once for each rate (each row of the VAT table), not for each product line.
 
 ---
 
@@ -216,7 +216,7 @@ gross.merge(rate, amount, BigDecimal::add);
 
 ### Things that will bite you
 
-* **Group first, then compute the VAT.** The three-argument `Collectors.groupingBy` takes a map factory as its second argument. Use it with `EnumMap::new` and a `Collectors.reducing` as the downstream collector. Then turn each group into a `VatLine` in a separate step.
+* **Group first, then compute the VAT.** The three-argument `Collectors.groupingBy` takes a map factory as its second argument. `EnumMap` needs the key class, so the factory is `() -> new EnumMap<>(VatRate.class)`, not `EnumMap::new`. Use a `Collectors.reducing` as the downstream collector. Then turn each group into a `VatLine` in a separate step.
 * **Pick the starting value of a sum carefully.** `BigDecimal.ZERO` has scale 0. An empty receipt would then print `0` instead of `0.00`, and an `equals` comparison would fail.
 * **`BigDecimal.equals` depends on scale**, and `compareTo` does not. Money in this task always has scale 2, so `equals` is a fair test. Keep it that way.
 * **`divide` needs a scale and a rounding mode.** Without them, a non-terminating result like `1/119` throws `ArithmeticException`.
@@ -313,6 +313,7 @@ Four test classes cover the contract:
 | Rounding each line's VAT and adding the results | Gives `0.06` instead of `0.05` in the three-line example. The tax office expects the per-rate figure. |
 | `double` or `float` for prices and VAT | Binary floating point cannot represent `0.10` exactly, so sums drift. Use `BigDecimal`. |
 | `HashMap` instead of `EnumMap` | The iteration order is arbitrary, so the receipt can print rate B before rate A. `EnumMap` follows the declaration order and is faster. |
+| `EnumMap::new` as the map factory | It does not compile: `EnumMap` needs the key class. Write `() -> new EnumMap<>(VatRate.class)`. |
 | `Collectors.groupingBy` without a map factory | It returns a `HashMap`, so the order problem comes back without any warning. |
 | Returning `0` for "no age check" without saying so | `0` and `OptionalInt.empty()` both work here. The bug is leaving the meaning unclear, so a caller treats `0` as a real age. |
 | `BigDecimal.ZERO` as the start value of the sum | It has scale 0, so an empty receipt prints `0`, not `0.00`. |

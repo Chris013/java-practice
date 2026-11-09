@@ -4,7 +4,7 @@
 |---|---|---|
 | 🔴 Hard | Concurrency for I/O fan-out: virtual threads, `ExecutorService.invokeAll` with a timeout, `Future.state()`, `resultNow()` and `exceptionNow()` (Java 19+) · Timeouts, cancellation and interruption · Partial results and failure reporting · Testing concurrent code deterministically with latches · Comparison with `CompletableFuture` and structured concurrency (preview) | 3–4 h |
 
-> **Background reading:** JEP 444 (virtual threads) · JEP 505 (structured concurrency, fifth preview in JDK 25) · *Java Concurrency in Practice* ch. 6.3 ("Placing time limits on tasks") and ch. 7.1 (interruption) · *Modern Java in Action* ch. 16 (`CompletableFuture`) · *Effective Java* Item 80 ("Prefer executors, tasks, and streams to threads")
+> **Background reading:** JEP 444 (virtual threads) · JEP 505 (structured concurrency, fifth preview in JDK 25) · *Java Concurrency in Practice* ch. 6.3.7–6.3.8 ("Placing time limits on tasks", "Example: a travel reservations portal") and ch. 7.1 (interruption) · *Modern Java in Action* ch. 16 (`CompletableFuture`) · *Effective Java* Item 80 ("Prefer executors, tasks, and streams to threads")
 
 ---
 
@@ -55,10 +55,11 @@ The time budget looks like this with four providers. Three answer in time, and o
 gantt
     title Search with a 2000 ms budget, all providers started at once
     dateFormat x
+    axisFormat %S.%L s
     section Providers
-    ECB answers after 300 ms       :done, e1, 0, 300
-    Backup answers after 800 ms    :done, b1, 0, 800
-    Airline answers after 1500 ms  :done, a1, 0, 1500
+    KLM answers after 300 ms       :done, k1, 0, 300
+    TAP answers after 800 ms       :done, t1, 0, 800
+    Iberia answers after 1500 ms   :done, i1, 0, 1500
     Partner hangs until budget     :crit, p1, 0, 2000
 ```
 
@@ -78,6 +79,7 @@ Implement [`QuoteAggregator`](../src/main/java/io/github/chris013/practice/task2
    * A provider that answers in time contributes its quotes to the result.
    * A provider that has not answered when the budget ends is cancelled **with interruption**. It is reported as a [`ProviderFailure`](../src/main/java/io/github/chris013/practice/task23/ProviderFailure.java) with reason `TIMEOUT`.
    * A provider that throws is reported as `ERROR`. Its detail is the exception's simple class name, a colon, and its message, for example `IOException: 503`. If there is no message, the detail is the class name alone.
+   * A provider that throws an `Error` makes `quotesFor` rethrow it.
    * A `null` request is a `NullPointerException`.
    * If the calling thread is interrupted while it waits, the method throws `InterruptedException`.
 3. **`close()`** shuts the executor down, so no virtual thread outlives the aggregator.
@@ -91,7 +93,7 @@ Implement [`QuoteAggregator`](../src/main/java/io/github/chris013/practice/task2
 * **No `Thread.sleep` in the tests** to "wait for" a thread. Use latches and barriers. The only sleep is inside the slow fake, and it is at most 50 ms.
 * **No per-provider timeouts yet.** One overall budget is enough for this task. Per-provider budgets are a stretch goal.
 * **Do not swallow `InterruptedException`.** If you catch it, you must either rethrow it or restore the interrupt flag.
-* **Do not catch `Throwable`.** A provider can fail with an `Error`, and that should not be hidden either. Use the future's state, not a catch-all.
+* **Do not catch `Throwable`.** A provider can fail with an `Error`, such as `OutOfMemoryError`. That is not an answer from the provider, so `quotesFor` rethrows it instead of reporting it as a failure. Use the future's state, not a catch-all.
 
 ## How I'd approach it
 
@@ -107,9 +109,22 @@ Implement [`QuoteAggregator`](../src/main/java/io/github/chris013/practice/task2
 * **Why cancellation must interrupt.** `Future.cancel(false)` only marks the future as cancelled. The provider's thread keeps running and keeps its connection. `cancel(true)` interrupts the thread, and a well-behaved HTTP client or a `CountDownLatch.await()` stops when it sees the interrupt. The provider contract in [`QuoteProvider`](../src/main/java/io/github/chris013/practice/task23/QuoteProvider.java) says exactly this.
 * **Why the budget is overall, not per provider.** All providers start at the same moment, so the budget is one deadline. If you waited for each provider with its own `get(timeout)` in a loop, the waits would add up: four providers that all hang would cost four times the budget. `invokeAll` with one timeout gives you the right behaviour without arithmetic.
 * **Why the caller's interrupt is not swallowed.** If the user closes the page, the thread running `quotesFor` is interrupted. That is information the caller needs. `Thread.currentThread().interrupt()` in a `catch` block is one way to keep it, but then the method still returns normally and the caller might keep working. Declaring `throws InterruptedException` is clearer: the caller gets an exception, the cancellation happens in `invokeAll`, and the caller decides what to do. Java clears the flag when it throws the exception, which is the standard convention.
-* **Why `close()` cancels first.** `ExecutorService.close()` (Java 19+) waits for running tasks. If a provider ignores interruption, `close()` waits forever. Calling `shutdownNow()` first interrupts the tasks, and only then does `close()` wait for them.
+* **Why `close()` cancels first.** `ExecutorService.close()` (Java 19+) waits for running tasks. `invokeAll` has already cancelled late providers, but a search may still be in progress on another thread. `shutdownNow()` interrupts those providers, and only then does `close()` wait for them to react. A provider that ignores interruption would still block `close()`, which is why the provider contract requires it to respond to interrupts.
 * **Test with latches, not sleeps.** A hanging fake blocks on a `CountDownLatch` that is never released. The test waits until the provider has started, and until the cancellation has reached it. Both are signalled by a latch with a timeout. A sleep would make the test slow and flaky.
 * **Keep the timing assertions loose.** The budget is 200 ms in the tests. Assert a range (for example, less than 1500 ms), not an exact time. Machines are noisy.
+
+### Why not CompletableFuture?
+
+`CompletableFuture` looks like the natural tool, because it has timeouts built in. `orTimeout(2, SECONDS)` completes the future exceptionally when the time is up. `completeOnTimeout(List.of(), 2, SECONDS)` completes it with a fallback value. Both only complete the future. The supplier keeps running. A `CompletableFuture` is not bound to a thread, so there is nothing to interrupt. `cancel(true)` ignores its argument, even when the supplier runs on a virtual-thread executor. The page gets its answer on time, but the HTTP call keeps its connection, which is the original bug.
+
+| Approach | Wall time | Cancels late work | Blocking I/O OK | Stable API |
+|---|---|---|---|---|
+| Sequential | sum of all calls | no | yes | yes |
+| `supplyAsync` on the common pool | about the budget | no | starves the pool | yes |
+| `invokeAll` on virtual threads | about the budget | yes, with interrupt | yes | yes |
+| `StructuredTaskScope` | about the budget | yes, with interrupt | yes | preview in JDK 25 |
+
+`invokeAll` on virtual threads is the only row that cancels late work and has a stable API. It keeps the threads, so it can interrupt them.
 
 ## Tests
 
@@ -166,7 +181,7 @@ Run: `mvn test -Dtest='**/task23/**'`
 
 **5. Declare `InterruptedException` on `quotesFor`.** The caller decides what an interrupt means. We do not catch it and return a partial result, because that would make a shutdown look like a normal search. Rethrowing `CancellationException` would hide the interrupt inside an unchecked exception that callers forget to handle.
 
-**6. `close()` cancels, then waits.** `shutdownNow()` interrupts the remaining tasks, and `close()` waits for them to finish. Without the first call, a provider that ignores interruption would hold up the close forever.
+**6. `close()` cancels, then waits.** `invokeAll` has already cancelled late providers, but a search may still be in progress on another thread. `shutdownNow()` interrupts its providers, and `close()` then waits until they have reacted. A provider that ignores interruption would still block `close()`. That is why the provider contract requires it to respond to interrupts.
 
 **7. Sorting lives in the result record.** `AggregatedQuotes` sorts its lists in the compact constructor. Every caller gets the same order, and the page does not have to remember to sort.
 
@@ -177,20 +192,28 @@ Run: `mvn test -Dtest='**/task23/**'`
 
 ### Sketch: the same idea with `StructuredTaskScope`
 
-This is a sketch, not code you can compile without `--enable-preview`. Check the JDK 25 javadoc and JEP 505 for the exact signatures, especially the joiner.
+This is a sketch, not code you can compile without `--enable-preview`. The project does not enable preview features, so it is not compiled here.
 
 ```java
-try (var scope = StructuredTaskScope.open(/* a joiner that waits for all */)) {
-    List<Subtask<List<Quote>>> subtasks = providers.stream()
-            .map(p -> scope.fork(() -> p.quotesFor(request)))
-            .toList();
-    scope.joinUntil(Instant.now().plus(budget));   // throws TimeoutException at the deadline
-    // Leaving the try block shuts the scope down and cancels unfinished subtasks.
-    // Then map each subtask by state(), as in the solution.
+final class CollectAll implements Joiner<List<Quote>, Void> {
+    final Queue<Subtask<? extends List<Quote>>> finished = new ConcurrentLinkedQueue<>();
+    @Override public boolean onComplete(Subtask<? extends List<Quote>> subtask) { finished.add(subtask); return false; }
+    @Override public Void result() { return null; }
 }
+
+var joiner = new CollectAll();
+try (var scope = StructuredTaskScope.open(joiner, cf -> cf.withTimeout(budget))) {
+    providers.forEach(p -> scope.fork(() -> p.quotesFor(request)));
+    try {
+        scope.join();
+    } catch (StructuredTaskScope.TimeoutException e) {
+        // the scope is cancelled: unfinished subtasks are interrupted
+    }
+}
+// joiner.finished holds SUCCESS/FAILED subtasks; every provider not in it is a TIMEOUT
 ```
 
-The structure is attractive. The scope owns the threads, so they cannot outlive it, and the deadline is a property of the scope. It is still a preview API in JDK 25, and it changes between previews. That is why we use `invokeAll`, which is stable.
+The structure is attractive. The scope owns the threads, so they cannot outlive it, and the deadline is a property of the scope. It is still a preview API in JDK 25, and it changes between previews. With JDK 25's timeout, unfinished subtasks end up `UNAVAILABLE`, and `Subtask.get()` cannot be used for partial results after a timeout. That is why the joiner collects the finished subtasks itself. It is one more reason to wait for the API to become final. That is why we use `invokeAll`, which is stable.
 
 ### What I typically flag in first attempts
 
@@ -200,8 +223,8 @@ The structure is attractive. The scope owns the threads, so they cannot outlive 
 | `future.cancel(false)` or no cancel at all | The provider keeps running and holding its connection. The bug in the situation section is exactly this. Use `cancel(true)` or `invokeAll` timeouts. |
 | `catch (InterruptedException e) {}` | The caller can no longer tell that it was asked to stop. Rethrow it, or restore the flag with `Thread.currentThread().interrupt()`. |
 | `get(timeout)` in a loop over providers | Each wait adds to the total: four hanging providers cost four budgets, not one. Use one deadline for all. |
-| `catch (Throwable t)` around each provider | It hides `Error`s such as `OutOfMemoryError`. Use the future's state, and let real errors escape. |
+| `catch (Throwable t)` around each provider | It hides `Error`s such as `OutOfMemoryError`. Use the future's state, and rethrow real errors. |
 | `Thread.sleep(500)` in the test "to let the threads finish" | Slow and flaky. Use a latch, and wait for the signal with a timeout. |
-| `CompletableFuture.cancel(true)` expected to stop the work | It does not interrupt the running task. The supplier keeps running. Only `ExecutorService` tasks get interrupted. |
+| `CompletableFuture.cancel(true)` expected to stop the work | It does not interrupt the running task. The supplier keeps running. Only futures that own a thread (the `FutureTask`s returned by `ExecutorService.submit`/`invokeAll`) interrupt on `cancel(true)`. |
 
 </details>

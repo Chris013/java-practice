@@ -36,8 +36,18 @@ final class FakeProvider implements QuoteProvider {
     }
 
     static QuoteProvider failing(String name) {
+        return failingWith(name, new IOException("503"));
+    }
+
+    static QuoteProvider failingWith(String name, Exception failure) {
         return new FakeProvider(name, request -> {
-            throw new IOException("503");
+            throw failure;
+        });
+    }
+
+    static QuoteProvider throwingError(String name) {
+        return new FakeProvider(name, request -> {
+            throw new StackOverflowError("test");
         });
     }
 
@@ -53,7 +63,7 @@ final class FakeProvider implements QuoteProvider {
     /** Waits on a barrier, so it only answers if all barrier parties are running at the same time. */
     static QuoteProvider answeringAfter(String name, CyclicBarrier barrier, Quote quote) {
         return new FakeProvider(name, request -> {
-            barrier.await(5, TimeUnit.SECONDS);
+            barrier.await(1, TimeUnit.SECONDS);
             return List.of(quote);
         });
     }

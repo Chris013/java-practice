@@ -3,8 +3,10 @@ package io.github.chris013.practice.task23;
 import static io.github.chris013.practice.task23.FakeProvider.answering;
 import static io.github.chris013.practice.task23.FakeProvider.answeringAfter;
 import static io.github.chris013.practice.task23.FakeProvider.failing;
+import static io.github.chris013.practice.task23.FakeProvider.failingWith;
 import static io.github.chris013.practice.task23.FakeProvider.quote;
 import static io.github.chris013.practice.task23.FakeProvider.slowAnswering;
+import static io.github.chris013.practice.task23.FakeProvider.throwingError;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -98,6 +100,26 @@ class QuoteAggregatorTest {
                 assertThat(result.quotes()).isEmpty();
                 assertThat(result.cheapest()).isEmpty();
                 assertThat(result.failures()).extracting(ProviderFailure::provider).containsExactly("A", "B");
+            }
+        }
+
+        @Test
+        void reports_only_the_class_name_when_the_exception_has_no_message() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(
+                    failingWith("Silent", new IllegalStateException())), BUDGET)) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.failures()).containsExactly(
+                        new ProviderFailure("Silent", Reason.ERROR, "IllegalStateException"));
+            }
+        }
+
+        @Test
+        void an_error_in_a_provider_is_not_turned_into_a_failure() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(throwingError("Broken")), BUDGET)) {
+                assertThatThrownBy(() -> aggregator.quotesFor(REQUEST))
+                        .isInstanceOf(StackOverflowError.class);
             }
         }
     }
@@ -214,7 +236,38 @@ class QuoteAggregatorTest {
     }
 
     @Nested
+    class Closing {
+
+        @Test
+        void close_interrupts_a_search_that_is_still_running() throws Exception {
+            Hanging hanging = FakeProvider.hanging("Stuck");
+            var aggregator = new QuoteAggregator(List.of(hanging), Duration.ofSeconds(10));
+            Thread caller = Thread.ofVirtual().start(() -> {
+                try {
+                    aggregator.quotesFor(REQUEST);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertThat(hanging.awaitStarted(Duration.ofSeconds(1))).isTrue();
+
+            Thread closer = Thread.ofVirtual().start(aggregator::close);
+
+            assertThat(hanging.awaitInterrupted(Duration.ofSeconds(1))).isTrue();
+            assertThat(closer.join(Duration.ofSeconds(1))).isTrue();
+            assertThat(caller.join(Duration.ofSeconds(1))).isTrue();
+        }
+    }
+
+    @Nested
     class Construction {
+
+        @Test
+        void rejects_a_null_budget_naming_the_parameter() {
+            assertThatThrownBy(() -> new QuoteAggregator(List.of(answering("A")), null))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("budget");
+        }
 
         @Test
         void rejects_an_empty_provider_list() {

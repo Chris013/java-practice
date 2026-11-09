@@ -24,7 +24,7 @@ public final class QuoteAggregator implements AutoCloseable {
 
     private final List<QuoteProvider> providers;
     private final Duration budget;
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executor;
 
     /**
      * @throws IllegalArgumentException if {@code providers} is empty or {@code budget} is not positive
@@ -40,6 +40,8 @@ public final class QuoteAggregator implements AutoCloseable {
         }
         this.providers = List.copyOf(providers);
         this.budget = budget;
+        // Created last, so a failed validation above does not leak an executor.
+        this.executor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
     /**
@@ -68,7 +70,13 @@ public final class QuoteAggregator implements AutoCloseable {
             Future<List<Quote>> future = futures.get(i);
             switch (future.state()) {
                 case SUCCESS -> quotes.addAll(future.resultNow());
-                case FAILED -> failures.add(new ProviderFailure(provider, Reason.ERROR, describe(future.exceptionNow())));
+                case FAILED -> {
+                    Throwable cause = future.exceptionNow();
+                    if (cause instanceof Error error) {
+                        throw error; // a broken JVM or library, not an answer from the provider
+                    }
+                    failures.add(new ProviderFailure(provider, Reason.ERROR, describe(cause)));
+                }
                 case CANCELLED -> failures.add(new ProviderFailure(
                         provider, Reason.TIMEOUT, "no answer within " + budget.toMillis() + " ms"));
                 case RUNNING -> throw new IllegalStateException("invokeAll returned before " + provider + " finished");
@@ -78,8 +86,9 @@ public final class QuoteAggregator implements AutoCloseable {
     }
 
     /**
-     * Shuts the executor down. Cancelling first matters: {@code close()} waits for running tasks, and a
-     * provider that is still blocked would otherwise hold up the caller.
+     * Shuts the executor down. {@code shutdownNow()} interrupts the providers that are still running, and
+     * {@code close()} then waits until they have reacted. A provider that ignores interruption would still
+     * block {@code close()}.
      */
     @Override
     public void close() {

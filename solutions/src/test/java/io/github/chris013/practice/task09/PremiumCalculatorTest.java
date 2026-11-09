@@ -62,18 +62,18 @@ class PremiumCalculatorTest {
         }
 
         @ParameterizedTest
-        @ValueSource(ints = {5, 16})
-        void drivers_well_under_18_are_uninsurable(int age) {
-            assertThatThrownBy(() -> liabilityQuote(aPolicyholder().aged(age).build()))
+        @ValueSource(ints = {16, 17})
+        void drivers_aged_16_or_17_are_uninsurable(int age) {
+            assertThatThrownBy(() -> liabilityQuote(aPolicyholder().aged(age).licensedForYears(0).build()))
                     .isInstanceOf(UninsurableException.class);
         }
 
         @ParameterizedTest(name = "aged {0} pays {1}")
         @CsvSource({
             "18, 450.00", // insurable from the 18th birthday: young-driver factor
-            "24, 450.00",
+            "24, 450.00", // last year with the young-driver factor
             "25, 300.00", // the young-driver factor is gone on the 25th birthday
-            "69, 300.00",
+            "69, 300.00", // last year before the senior factor
             "70, 360.00"  // senior factor from the 70th birthday
         })
         void the_age_factor_follows_the_age_bands(int age, String expected) {

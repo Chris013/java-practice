@@ -155,6 +155,17 @@ class TokenBucketTest {
             time.advance(Duration.ofMillis(1));
             assertThat(bucket.availableTokens()).isEqualTo(1);
         }
+
+        @Test
+        void a_tiny_period_and_a_long_gap_fill_the_bucket_without_an_exception() {
+            TokenBucket bucket = new TokenBucket(5, 1, Duration.ofNanos(1), time);
+            assertThat(bucket.tryConsume(5)).isTrue();
+
+            // About 1.3e19 nanoseconds, more than a long can count (about 9.2e18). The bucket must still be full.
+            time.advance(Duration.ofDays(400 * 365L));
+
+            assertThat(bucket.availableTokens()).isEqualTo(5);
+        }
     }
 
     @Nested

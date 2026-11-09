@@ -53,7 +53,7 @@ sequenceDiagram
     Caller->>Bucket: consume all 10 tokens
     Note over Bucket: 0 tokens, refill point at 0 s
     Caller->>Bucket: available at t=1.5 s
-    Bucket-->>Caller: 1 token, refill point moves to 1 s (0.5 s kept)
+    Bucket-->>Caller: 1 token, refill point moves to 1 s, 0.5 s kept
     Caller->>Bucket: available at t=2.0 s
     Bucket-->>Caller: 2 tokens, refill point moves to 2 s
 ```
@@ -163,7 +163,7 @@ The time is always controlled by [`MutableInstantSource`](../src/test/java/io/gi
 
 1. Make `tryConsume` tell the caller how long to wait: `Optional<Duration> retryAfter`, or a small sealed type `Granted` / `Refused(Duration retryAfter)`. The HTTP `Retry-After` header needs that number. How do you compute it exactly, given the remainder rule?
 2. Evict idle buckets. Each key that goes quiet keeps a bucket in memory forever. Remove a bucket once it has been full for a full period. Which operation is safe to race with `tryAcquire`, and which is not?
-3. Add a blocking `acquire(K key)` that waits until a token is available. With virtual threads, `Thread.sleep` for the wait is cheap. Test it without real waiting: the test should show the call is blocked until the fake time moves, and then returns.
+3. Add a blocking `acquire(K key)` that waits until a token is available. With virtual threads, waiting is cheap. Inject the waiting as well, for example a small `Sleeper` interface, or a `Condition`/`LockSupport.park` that the test wakes up after moving the fake time. In production, sleeping or parking on a virtual thread is cheap. Test it without real waiting: the test should show the call is blocked until the fake time moves, and then returns.
 4. Read the source or the documentation of Guava's `RateLimiter` and Bucket4j. Both are real libraries. Which algorithm does each use: a token bucket, or a leaky bucket? Which one allows bursts? In what cases would you rather use a library than your own 100 lines?
 
 ---
@@ -183,20 +183,23 @@ The time is always controlled by [`MutableInstantSource`](../src/test/java/io/gi
 
 **4. The clock is read once per attempt, outside the loop.** On a retry the same `now` is used again. This is safe because the refill logic treats any `now` before the refill point as "no time passed". If thread B has already stored a state with a later refill point, thread A's older reading does not add or remove anything. Reading the clock inside the loop would make the retries depend on timing noise and would make the reasoning harder, not easier.
 
-**5. ABA is harmless here.** The ABA problem is when a value changes from A to B and back to A, so a CAS that compares values wrongly succeeds. `compareAndSet` compares references, and every `State` is a fresh object that is never stored twice. A state that another thread has replaced can never come back as the same reference. The counter-example is a design that reuses cached `State` objects, for example a shared `State.EMPTY` constant. Then ABA could happen.
+**5. ABA is harmless here.** The ABA problem is when a value changes from A to B and back to A, so a CAS that compares values wrongly succeeds. `compareAndSet` compares references, and every `State` is a fresh object that is never stored twice. A state that another thread has replaced can never come back as the same reference. Even if `State` objects were reused, for example a shared `State.EMPTY`, ABA would be harmless here: the next state depends only on the current tokens and refill point, and an immutable `State` that is the same reference has the same values. ABA is a real bug only when the CAS'd reference stands for more than its value, for example a node in a lock-free stack whose `next` field was changed in the meantime.
 
-**6. Integer arithmetic only, with the overflow case handled before multiplying.** `periods` is `elapsed / refillPeriod`, which is a `long`. Before multiplying `periods * refillTokens`, the code checks whether `periods` is already enough to fill the bucket, using `Math.ceilDiv(missing, refillTokens)`. If it is, the result is a full bucket and no multiplication happens. Otherwise `periods` is below the number needed to fill the bucket, and the product is below `missing`, which cannot overflow.
+**6. Integer arithmetic only, with the overflow cases handled before multiplying.** `periods` is `elapsed / refillPeriod`, which is a `long`. Dividing a `Duration` by a tiny period can produce a quotient that does not fit in a `long`, and `dividedBy` then throws `ArithmeticException`. The code catches that and uses `Long.MAX_VALUE` as the period count, because a count that large fills any bucket. Before multiplying `periods * refillTokens`, the code checks whether `periods` is already enough to fill the bucket, using `Math.ceilDiv(missing, refillTokens)`. If it is, the result is a full bucket and no multiplication happens. Otherwise `periods` is below the number needed to fill the bucket, and the product is below `missing`, which cannot overflow.
 
 **7. `RateLimiter` uses `computeIfAbsent`, and the factory is cheap.** The factory only creates an object and reads the clock, so holding the map's bin lock for that long is fine. A `get` followed by `put` would let two threads create two buckets for one key. One bucket would then be overwritten, and its tokens with it. The rule that makes this work is: **the factory must not block and must not call back into the map.**
 
 **8. `synchronized` versus CAS.** Here is the lock-based version, as an equally valid alternative:
 
 ```java
+private final Object lock = new Object();   // guards tokens and refilledAt
+private long tokens;
+private Instant refilledAt;
+
 public boolean tryConsume(long tokens) {
     checkTokens(tokens);
-    synchronized (this) {                       // private lock object, never a public one
-        Instant now = time.instant();
-        refreshLocked(now);
+    synchronized (lock) {
+        refillLocked(time.instant());
         if (this.tokens < tokens) {
             return false;
         }
@@ -211,7 +214,7 @@ Both versions are correct. The difference:
 * **Simplicity.** The lock version reads like the rules. The CAS version needs the reader to know why the loop is correct. For a team, the lock is often the better default.
 * **Blocking.** The lock version makes threads wait for each other. With virtual threads this is cheap, and since JDK 24 (JEP 491) a virtual thread waiting for a `synchronized` monitor no longer pins its carrier thread. Before JDK 24 a waiting virtual thread could hold a carrier, so a burst of waiting threads could starve the pool.
 * **Contention.** Under heavy contention the CAS loop wastes work: each failed `compareAndSet` throws away a computed state and starts again. The lock makes threads queue instead. For one hot key with thousands of requests per second, a benchmark is the only way to know which wins. For this task, both are fine.
-* **Scope.** A lock on `this` is visible to any caller who can get a reference to the bucket, so use a private lock object if you go that way. The CAS version has no lock to leak.
+* **Scope.** A lock on `this` is visible to any caller who can get a reference to the bucket, so use a private lock object if you go that way (*Effective Java* Item 82). The CAS version has no lock to leak.
 
 ### Code
 

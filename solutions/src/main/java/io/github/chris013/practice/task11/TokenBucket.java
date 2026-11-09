@@ -99,7 +99,12 @@ public final class TokenBucket {
             // next refill comes one full period later.
             return new State(capacity, now);
         }
-        long periods = Duration.between(current.refilledAt(), now).dividedBy(refillPeriod);
+        long periods;
+        try {
+            periods = Duration.between(current.refilledAt(), now).dividedBy(refillPeriod);
+        } catch (ArithmeticException tooManyToCount) {
+            periods = Long.MAX_VALUE; // any such number fills the bucket
+        }
         if (periods == 0) {
             return current;
         }

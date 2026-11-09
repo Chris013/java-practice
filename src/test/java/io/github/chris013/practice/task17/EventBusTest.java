@@ -123,6 +123,7 @@ class EventBusTest {
         @Test
         void rejects_null_arguments() {
             assertThatNullPointerException().isThrownBy(() -> bus.subscribe(OrderPlaced.class, null));
+            assertThatNullPointerException().isThrownBy(() -> bus.subscribe(null, new RecordingHandler<>()));
             assertThatNullPointerException().isThrownBy(() -> bus.publish(null));
             assertThatNullPointerException().isThrownBy(() -> bus.publishAll(null));
         }

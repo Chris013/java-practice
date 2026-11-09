@@ -39,7 +39,8 @@ classDiagram
         <<record>>
         Class type
         Consumer handler
-        +deliverIfMatching(Object event) boolean
+        +matches(Object event) boolean
+        +deliver(Object event) void
     }
     class Subscription {
         <<interface>>
@@ -109,6 +110,35 @@ Implement the bus in [`EventBus`](../src/main/java/io/github/chris013/practice/t
 7. **`close()` on a `Subscription`** stops the delivery to its handler. It is **idempotent**: closing twice does nothing, and it never throws. Closing one of two subscriptions for the same handler leaves the other one working.
 8. **No unchecked code.** The main code has no `@SuppressWarnings` and no unchecked casts, and it compiles without warnings under `-Xlint:all`. Matching a `Class<E>` to an event goes through `Class.isInstance` and `Class.cast`.
 
+## Generics you need for this task
+
+The bus has the signature `<E> Subscription subscribe(Class<E>, Consumer<? super E>)`. Most of the questions in a design review about it come down to three ideas.
+
+**PECS: Producer Extends, Consumer Super.** A generic type parameter with `? extends T` lets you *read* a `T` out of a structure. A parameter with `? super T` lets you *write* a `T` into it. A `Consumer<? super OrderPlaced>` is a thing that can accept an `OrderPlaced`, and possibly anything above it. Here is the type hierarchy our handlers rely on:
+
+```mermaid
+flowchart TD
+    Object --> DomainEvent
+    DomainEvent --> OrderPlaced
+    DomainEvent --> CustomerRegistered
+```
+
+Read the arrows as "is a supertype of". A `Consumer<Object>` can handle every event, so it is a valid `Consumer<? super OrderPlaced>`. That is why the test `a_consumer_of_object_can_subscribe_to_a_specific_event` compiles. If the parameter were `Consumer<E>`, a logger written as `Consumer<Object>` could not subscribe to `OrderPlaced` at all, and the API would be less useful for no safety gain. Item 31 of *Effective Java* has the full argument, and Naftalin and Wadler explain why `Consumer<Object>` is not a subtype of `Consumer<OrderPlaced>` in the first place (generics are invariant).
+
+```mermaid
+flowchart LR
+    Events[Iterable of OrderPlaced] -->|producer, read as Object, extends| Bus[EventBus]
+    Bus -->|consumer, write OrderPlaced, super| Logger[Consumer of Object]
+```
+
+**Why `Iterable<?>` in `publishAll`?** The bus only *reads* the elements, and it reads them as `Object`. So the widest type is correct: `Iterable<?>` accepts a `List<OrderPlaced>`, a `Set<DomainEvent>` or a `List<Object>`. Writing `Iterable<Object>` would reject the first two, which is the mistake the PECS rule warns about.
+
+**Why `Class<E>` and not `E.class`?** Type erasure removes `E` at compile time. Inside `subscribe`, the bus has no way to ask "is this event an `E`?" unless it gets a runtime object that knows `E`. That object is the `Class<E>` token. Java has no `E.class` syntax, which is why the caller always passes `OrderPlaced.class` explicitly.
+
+**What is a typesafe heterogeneous container?** It is a container whose keys carry a type, so that `get(Key<T>)` returns a `T` with no cast. Effective Java Item 33 describes it, and `Map<Class<?>, Object>` with `type.cast(value)` on the way out is the standard implementation. Our bus is a close cousin: the key is the event type, the value is the handler, and the type is checked at run time by `Class.isInstance` and `Class.cast`.
+
+**Thread safety.** The bus is safe for concurrent `subscribe`, `close` and `publish`. The reason is the `CopyOnWriteArrayList`: writes copy the list, reads see a consistent snapshot without any lock. Publishing is much more common than subscribing, so this is the right trade-off. Note that a *single* handler can still be called from two threads at the same time, if two publishes run concurrently. That is the handler's problem, and it is documented in the class Javadoc.
+
 ## Constraints & non-goals
 
 * No external libraries (no Guava, no Spring). Only the JDK.
@@ -116,10 +146,13 @@ Implement the bus in [`EventBus`](../src/main/java/io/github/chris013/practice/t
 * No annotation scanning (`@Subscribe`), no priorities and no asynchronous delivery in this task. Those are stretch goals.
 * Keep the public API exactly as above. You may add private or package-private helpers.
 * Synchronization: the bus must be safe for `subscribe`, `close` and `publish` on different threads. You don't need to make it fast for writers.
+* A handler failure is a bug in that handler. The bus reports it; it does not retry, log, or decide what the business does. The caller decides.
+* A dead event is information for operations, not an error. Publishing one never throws on its own.
+* Nothing in the bus is persistent. If the JVM dies, undelivered events are lost. That is an acceptable trade-off for in-process modules, and it is the reason we don't use this bus for payments.
 
 ## How I'd approach it
 
-* **Start with the types, not the bus.** Write `Registration<E>` first and make `deliverIfMatching` work for one registration. The rest is a loop.
+* **Start with the types, not the bus.** Write `Registration<E>` first and make `matches` and `deliver` work for one registration. The rest is a loop.
 * **Use `Class<E>` as a type token.** You cannot write `E.class` or `event instanceof E` in Java, because of **erasure**: at run time, `E` does not exist. A `Class<E>` object carries the type at run time. `isInstance` answers "is this an event for me?", and `cast` returns the event as `E`.
 * **Keep the cast in one place.** Do not write `(E) event` anywhere. You don't need to: if `type` and `handler` share the same `E`, `type.cast(event)` already has the type the handler needs. Explain this in your PR description, because the trick is the whole point of the exercise.
 * **Keep one list for everything.** A single `List<Registration<?>>` gives you the global subscription order for free: the list keeps insertion order. Don't keep one list per type. Then you would have to merge them to get the order right.
@@ -147,35 +180,6 @@ Run: `mvn test -Dtest='**/task17/**'`
 
 </details>
 
-## Generics you need for this task
-
-The bus has the signature `<E> Subscription subscribe(Class<E>, Consumer<? super E>)`. Most of the questions in a design review about it come down to three ideas.
-
-**PECS: Producer Extends, Consumer Super.** A generic type parameter with `? extends T` lets you *read* a `T` out of a structure. A parameter with `? super T` lets you *write* a `T` into it. A `Consumer<? super OrderPlaced>` is a thing that can accept an `OrderPlaced`, and possibly anything above it. Here is the type hierarchy our handlers rely on:
-
-```mermaid
-flowchart TD
-    Object --> DomainEvent
-    DomainEvent --> OrderPlaced
-    DomainEvent --> CustomerRegistered
-```
-
-Read the arrows as "is a supertype of". A `Consumer<Object>` can handle every event, so it is a valid `Consumer<? super OrderPlaced>`. That is why the test `a_consumer_of_object_can_subscribe_to_a_specific_event` compiles. If the parameter were `Consumer<E>`, a logger written as `Consumer<Object>` could not subscribe to `OrderPlaced` at all, and the API would be less useful for no safety gain. Item 31 of *Effective Java* has the full argument, and Naftalin and Wadler explain why `Consumer<Object>` is not a subtype of `Consumer<OrderPlaced>` in the first place (generics are invariant).
-
-**Why `Iterable<?>` in `publishAll`?** The bus only *reads* the elements, and it reads them as `Object`. So the widest type is correct: `Iterable<?>` accepts a `List<OrderPlaced>`, a `Set<DomainEvent>` or a `List<Object>`. Writing `Iterable<Object>` would reject the first two, which is the mistake the PECS rule warns about.
-
-**Why `Class<E>` and not `E.class`?** Type erasure removes `E` at compile time. Inside `subscribe`, the bus has no way to ask "is this event an `E`?" unless it gets a runtime object that knows `E`. That object is the `Class<E>` token. Java has no `E.class` syntax, which is why the caller always passes `OrderPlaced.class` explicitly.
-
-**What is a typesafe heterogeneous container?** It is a container whose keys carry a type, so that `get(Key<T>)` returns a `T` with no cast. Effective Java Item 33 describes it, and `Map<Class<?>, Object>` with `type.cast(value)` on the way out is the standard implementation. Our bus is a close cousin: the key is the event type, the value is the handler, and the type is checked at run time by `Class.isInstance` and `Class.cast`.
-
-**Thread safety.** The bus is safe for concurrent `subscribe`, `close` and `publish`. The reason is the `CopyOnWriteArrayList`: writes copy the list, reads see a consistent snapshot without any lock. Publishing is much more common than subscribing, so this is the right trade-off. Note that a *single* handler can still be called from two threads at the same time, if two publishes run concurrently. That is the handler's problem, and it is documented in the class Javadoc.
-
-## Constraints & non-goals in detail
-
-* A handler failure is a bug in that handler. The bus reports it; it does not retry, log, or decide what the business does. The caller decides.
-* A dead event is information for operations, not an error. Publishing one never throws on its own.
-* Nothing in the bus is persistent. If the JVM dies, undelivered events are lost. That is an acceptable trade-off for in-process modules, and it is the reason we don't use this bus for payments.
-
 ## Definition of done
 
 - [ ] All 28 tests in `EventBusTest` are green.
@@ -183,7 +187,7 @@ Read the arrows as "is a supertype of". A `Consumer<Object>` can handle every ev
 - [ ] Subscription order is global across event types, and that is pinned by a test.
 - [ ] A failing handler does not stop the others, and the exception has the first failure as its cause and the others as suppressed.
 - [ ] A snapshot is used for the delivery, and both reentrancy rules hold.
-- [ ] Your PR description explains how `Registration.deliverIfMatching` type-checks without an unchecked cast.
+- [ ] Your PR description explains how `Registration.deliver` type-checks without an unchecked cast.
 
 ## Stretch goals
 
@@ -204,7 +208,7 @@ Read the arrows as "is a supertype of". A `Consumer<Object>` can handle every ev
 
 **1. One registration list, and the global order comes from it.** All subscriptions go into a single `CopyOnWriteArrayList<Registration<?>>`. Insertion order is subscription order, so "delivery in subscription order across types" is a property of the data structure, not an algorithm. The rejected alternative was a `Map<Class, List>` with a merge step at publish time, which is more code and gets the order wrong as soon as two types are involved.
 
-**2. The type check happens in one private record.** `Registration<E>(Class<E> type, Consumer<? super E> handler)` holds the matching pair. In `deliverIfMatching`, `type.cast(event)` returns an `E`, and the `Consumer<? super E>` accepts an `E`. The list holds `Registration<?>`, and when the compiler calls the method on one element it captures the unknown `E` once for both fields. No cast is written by us, so there is nothing to suppress. The rejected alternative was storing `Consumer<Object>` and casting the event to `E` through an unchecked cast with `@SuppressWarnings`. That compiles, but it lies to the compiler, and the warning it hides is the one the task is meant to remove.
+**2. The type check happens in one private record.** `Registration<E>(Class<E> type, Consumer<? super E> handler)` holds the matching pair. The list holds `Registration<?>`, so the bus cannot name `E`. It doesn't need to: the body of `deliver` is type-checked once, for an arbitrary `E` that `type` and `handler` share, so `type.cast(event)` is an `E` and `Consumer<? super E>` accepts it. Try the same thing from outside, `registration.handler().accept(registration.type().cast(event))`, and it does not compile. Each call on a `Registration<?>` gets its own fresh capture (`CAP#1`, `CAP#2`), and the compiler cannot prove they are the same type. Moving the code *into* the generic type gives both fields one name for the type, and that is the whole trick. No cast is written by us, so there is nothing to suppress. The rejected alternative was storing `Consumer<Object>` and casting the event to `E` through an unchecked cast with `@SuppressWarnings`. That compiles, but it lies to the compiler, and the warning it hides is the one the task is meant to remove.
 
 **3. Snapshot semantics for free.** Publishing iterates over the `CopyOnWriteArrayList`, which iterates over an array that is never modified in place. A handler subscribed during the publish is not in that array, and a handler closed during the publish is still in it. This is exactly the behaviour the tests pin down. The rejected alternative was an `ArrayList` with a `synchronized` block around publish. That serializes all publishes behind one lock, so a slow handler blocks every other thread, and a handler that waits for another thread to subscribe deadlocks. A plain `ArrayList` also throws `ConcurrentModificationException` on subscribe-during-publish.
 

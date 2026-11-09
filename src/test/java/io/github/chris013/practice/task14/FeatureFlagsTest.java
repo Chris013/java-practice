@@ -34,7 +34,7 @@ class FeatureFlagsTest {
         }
 
         @Test
-        void reads_several_flags_and_lists_their_names() {
+        void reads_several_flags() {
             FeatureFlags flags = FeatureFlags.parse("""
                     flag new-checkout
                       users alice
@@ -44,7 +44,7 @@ class FeatureFlagsTest {
                       off
                     """);
 
-            assertThat(flags.flagNames()).containsExactlyInAnyOrder("new-checkout", "dark-mode", "legacy-export");
+            assertThat(flags.flagNames()).containsExactly("new-checkout", "dark-mode", "legacy-export");
         }
 
         @Test

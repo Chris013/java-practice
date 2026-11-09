@@ -28,7 +28,9 @@ public final class FeatureFlags {
         throw new UnsupportedOperationException("TODO: Task 14");
     }
 
-    /** The names of all flags in the configuration. */
+    /**
+     * The names of all flags in the configuration, in the order they are written. The set cannot be modified.
+     */
     public Set<String> flagNames() {
         throw new UnsupportedOperationException("TODO: Task 14");
     }

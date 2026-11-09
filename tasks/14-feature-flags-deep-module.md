@@ -144,7 +144,7 @@ Implement the module in the package `io.github.chris013.practice.task14`. Only t
 1. **[`FeatureFlags`](../src/main/java/io/github/chris013/practice/task14/FeatureFlags.java)**
    * `static FeatureFlags parse(String configuration)` reads the whole text. It throws `FlagConfigurationException` when the text is invalid. `null` throws `NullPointerException`.
    * `boolean isEnabled(String flagName, EvaluationContext context)` answers the question. Both arguments must not be `null`.
-   * `Set<String> flagNames()` returns the names of all flags in the configuration.
+   * `Set<String> flagNames()` returns the names of all flags, in the order they are written in the configuration. The set cannot be modified.
    * The instance is immutable.
 2. **[`EvaluationContext`](../src/main/java/io/github/chris013/practice/task14/EvaluationContext.java)** is a `final` class, not a record.
    * `static EvaluationContext user(String userId, String country)`: the user id must not be `null` (`NullPointerException`) and must not be blank (`IllegalArgumentException`). The country may be `null` when it is unknown.

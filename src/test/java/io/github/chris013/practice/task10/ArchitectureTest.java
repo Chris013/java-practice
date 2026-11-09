@@ -1,5 +1,8 @@
 package io.github.chris013.practice.task10;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
+
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.GenericArrayType;
@@ -17,9 +20,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.fail;
 
 /**
  * Guards the dependency rule with plain reflection, so nobody can quietly make the domain depend on the database
@@ -73,7 +73,7 @@ class ArchitectureTest {
         while (roots.hasMoreElements()) {
             URL root = roots.nextElement();
             if (!"file".equals(root.getProtocol())) {
-                throw new AssertionError("expected compiled classes on disk, found " + root);
+                fail("expected compiled classes on disk, found %s", root);
             }
             try (var files = Files.list(Path.of(root.toURI()))) {
                 for (Path file : files.toList()) {

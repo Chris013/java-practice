@@ -297,11 +297,10 @@ class LendingServiceTest {
             lending.borrow(ANNA, C1);
             advanceDays(22);
 
-            LendingRefusedException refusal =
-                    catchThrowableOfType(LendingRefusedException.class, () -> lending.renew(C1));
-
-            assertThat(refusal.reason()).isEqualTo(RefusalReason.RENEWAL_NOT_ALLOWED);
-            assertThat(refusal).hasCauseInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> lending.renew(C1))
+                    .isInstanceOfSatisfying(LendingRefusedException.class,
+                            r -> assertThat(r.reason()).isEqualTo(RefusalReason.RENEWAL_NOT_ALLOWED))
+                    .hasCauseInstanceOf(IllegalStateException.class);
         }
     }
 }

@@ -156,7 +156,7 @@ Put the lending rules behind the ports, and make the three in-memory adapters wo
 * **Ask of every rule: which data does it need?** A late fee needs only the loan's due date and the return date, so it belongs to `Loan`. "Member has five loans" needs the member's loans from the repository and the limit, so it belongs to the service. Putting the rule in the wrong place is the most common mistake in this task.
 * **Do not put the rules in the ports.** The ports are *questions the application asks*: "give me the active loans of this member". They say nothing about how the answer is stored.
 * **Why the order of checks matters.** A blocked member with overdue loans should hear "blocked", because that is the more fundamental problem. Your tests will pin the order. Read them before you write the `if` chain.
-* **Why `renewedOn` throws.** A renewal is refused by an exception in the domain, not by a boolean. A caller that forgets to check a boolean would extend a loan that must not be extended. The service turns the exception into the refusal type the outside world understands. Think about what that translation loses, and whether you can keep the original exception attached, with the original kept as the cause (exception chaining, *Effective Java* Item 73).
+* **Why `renewedOn` throws.** A renewal is refused by an exception in the domain, not by a boolean. A caller that forgets to check a boolean would extend a loan that must not be extended. The service turns the exception into the refusal type the outside world understands. Think about what that translation loses. Look at the constructors of `LendingRefusedException` and at exception chaining (*Effective Java* Item 73).
 * **Money.** Use `BigDecimal`. The fee is `0.50` times a whole number of days. Pick a rounding policy explicitly. Here nothing needs rounding, so `setScale(2, RoundingMode.UNNECESSARY)` is a good check that you did not produce a fraction of a cent by accident.
 * **Time boundaries.** "Overdue" starts *after* the due date. Test the due date itself, and the day after it. Off-by-one errors live exactly there.
 * **Test doubles.** Look at how `LendingServiceTest` builds the service from the in-memory adapters. It needs no mock setup, and each test reads like a short story. That is the reason to prefer real in-memory adapters over mocks here: the test checks the *behaviour* (the loan was saved, the copy is free again), not the *calls* on a mock.
@@ -169,6 +169,7 @@ Run: `mvn test -Dtest='**/task10/**'`
 * [`LoanTest`](../src/test/java/io/github/chris013/practice/task10/LoanTest.java): the due date, the overdue boundary, the fee table with its cap, and the renewal rules.
 * [`LendingServiceTest`](../src/test/java/io/github/chris013/practice/task10/LendingServiceTest.java): every refusal reason, the order of the checks, and the happy paths for borrow, return and renew.
 * [`ArchitectureTest`](../src/test/java/io/github/chris013/practice/task10/ArchitectureTest.java): the dependency rule, checked by reflection over the compiled classes. It passes on the starter too, because it checks structure, not behaviour.
+* [`InMemoryLoanRepositoryTest`](../src/test/java/io/github/chris013/practice/task10/InMemoryLoanRepositoryTest.java): closing a copy ends its loan, and closing a copy without a loan does nothing.
 
 <details>
 <summary>Show the tests</summary>
@@ -180,6 +181,9 @@ Run: `mvn test -Dtest='**/task10/**'`
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task10/LendingServiceTest.java -->
+<!-- /embed -->
+
+<!-- embed: src/test/java/io/github/chris013/practice/task10/InMemoryLoanRepositoryTest.java -->
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task10/MutableClock.java -->

@@ -38,13 +38,24 @@ class SimplifierTest {
         }
 
         @Test
-        void folds_nested_constants_in_several_passes() {
+        void folds_nested_constants_bottom_up() {
             assertThat(simplify(add(mul(num(2), num(3)), pow(num(2), 2)))).isEqualTo(num(10));
         }
 
         @Test
         void an_overflowing_fold_throws_like_evaluation_does() {
             assertThatThrownBy(() -> simplify(add(num(Long.MAX_VALUE), num(1))))
+                    .isInstanceOf(ArithmeticException.class);
+        }
+
+        @Test
+        void a_negation_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> simplify(neg(num(Long.MIN_VALUE)))).isInstanceOf(ArithmeticException.class);
+        }
+
+        @Test
+        void a_grouped_constant_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> simplify(mul(num(Long.MAX_VALUE), mul(num(2), X))))
                     .isInstanceOf(ArithmeticException.class);
         }
     }
@@ -124,7 +135,7 @@ class SimplifierTest {
     }
 
     @Nested
-    class SeveralPasses {
+    class CombinedRules {
 
         @Test
         void an_inner_simplification_enables_an_outer_one() {
@@ -133,15 +144,19 @@ class SimplifierTest {
         }
 
         @Test
+        void negations_and_zeros_cancel_out_in_one_go() {
+            assertThat(simplify(neg(neg(add(X, num(0)))))).isEqualTo(X);
+        }
+    }
+
+    @Nested
+    class FixedPoint {
+
+        @Test
         void a_rule_output_that_matches_another_rule_is_simplified_again() {
             // 2x + 2x -> 2 * (2x) -> 4x. The second step only exists because of the fixed-point loop.
             Expr twiceTwoX = add(mul(num(2), X), mul(num(2), X));
             assertThat(simplify(twiceTwoX)).isEqualTo(mul(num(4), X));
-        }
-
-        @Test
-        void negations_and_zeros_cancel_out_in_one_go() {
-            assertThat(simplify(neg(neg(add(X, num(0)))))).isEqualTo(X);
         }
     }
 

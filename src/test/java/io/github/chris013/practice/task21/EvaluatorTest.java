@@ -97,5 +97,10 @@ class EvaluatorTest {
         void power_that_does_not_fit_throws() {
             assertThatThrownBy(() -> eval(pow(num(2), 63))).isInstanceOf(ArithmeticException.class);
         }
+
+        @Test
+        void negation_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> eval(neg(num(Long.MIN_VALUE)))).isInstanceOf(ArithmeticException.class);
+        }
     }
 }

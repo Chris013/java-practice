@@ -147,7 +147,7 @@ Implement the transitions and the status line. The starter gives you the ids, `C
 ## How I'd approach it
 
 * **Write the state records first, then the transitions.** The compact constructors hold the rules that must always be true: non-null components, the approver sets copied, and the four-eyes and approval-count rules checked. Once they are in place, the transition methods are short.
-* **Put the four-eyes rule where it can be broken.** `approve` is the place where a reviewer is added, so its check goes there. A `Rejected` can also be built directly, so the same check belongs in its constructor. Ask yourself which rules a caller must not be able to skip.
+* **Put each rule where it cannot be skipped.** The four-eyes rule is checked in `approve`, so the caller gets a clear error at the moment of the mistake. Every record can also be built directly with its constructor, so the same rule belongs in the compact constructors of `InReview`, `Approved`, `Published` and `Rejected`. Ask yourself which rules a caller must not be able to skip.
 * **The approval that completes the set changes the type.** Count the approvals after adding the reviewer. Below the threshold, return a new `InReview`. At the threshold, return an `Approved`. Do not add a boolean flag to `InReview` for this.
 * **How a caller handles `ReviewOutcome`.** The caller of `approve` must deal with both cases, and a `switch` makes the compiler check that:
 
@@ -165,7 +165,7 @@ Implement the transitions and the status line. The starter gives you the ids, `C
 
 ### Why the compiler error is the test
 
-There is no test for "publish on a draft". It does not compile. This is the point of the exercise. Here is what `javac` says for `Draft.create(...).publish(...)`:
+There is no test for "publish on a draft". It does not compile. This is the point of the exercise. Here is what `javac` says for `draft.publish(...)` where `draft` is a `Draft`:
 
 ```
 error: cannot find symbol
@@ -248,6 +248,12 @@ Run: `mvn test -Dtest='**/task12/**'`
 **5. One exhaustive switch in `StatusLine`, no `default`.** With `default`, a new state would compile and print a wrong line. Without it, the compiler points at `StatusLine` the moment a state is added. The alternative, `instanceof` checks in a chain, gives no such help.
 
 ### Code
+
+<!-- embed: solutions/src/main/java/io/github/chris013/practice/task12/Approvals.java -->
+<!-- /embed -->
+
+<!-- embed: solutions/src/main/java/io/github/chris013/practice/task12/Approved.java -->
+<!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task12/InReview.java -->
 <!-- /embed -->

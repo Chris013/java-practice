@@ -109,19 +109,22 @@ Implement the transitions and the status line. The starter gives you the ids, `C
    * `submit(at)` returns an `InReview` with `submittedAt = at` and no approvals.
 2. **Reviews** ([`InReview`](../src/main/java/io/github/chris013/practice/task12/InReview.java))
    * `approvals` is copied with `Set.copyOf`, so it is unmodifiable and independent of the set the caller passed in.
+   * The constructor rejects a review whose approvals contain the author (`four-eyes`), and a review that already has `content.classification().requiredApprovals()` approvals or more. Such a review would be an `Approved` document, so it must not exist.
    * `approve(reviewer, at)`: the author as reviewer throws `IllegalArgumentException` (message contains `four-eyes`).
    * `approve` by a reviewer who already approved throws `IllegalArgumentException`.
-   * `approve` returns a new `InReview` with the reviewer added while `approvals.size()` is less than `content.classification().requiredApprovals()`.
+   * `approve` returns a new `InReview` with the reviewer added while the number of approvals *including this one* is less than `content.classification().requiredApprovals()`; otherwise an `Approved`.
    * When the required number is reached, `approve` returns an `Approved` with `approvedAt = at` and the same approvers.
    * `reject(reviewer, reason, at)` returns a [`Rejected`](../src/main/java/io/github/chris013/practice/task12/Rejected.java). The author as reviewer throws `IllegalArgumentException` (message contains `four-eyes`). A blank reason throws `IllegalArgumentException`.
 3. **Approved documents** ([`Approved`](../src/main/java/io/github/chris013/practice/task12/Approved.java))
-   * The approvers are copied with `Set.copyOf`. Zero approvers throws `IllegalArgumentException`.
+   * The approvers are copied with `Set.copyOf`.
+   * The constructor rejects an author among the approvers (`four-eyes`), and fewer approvers than `content.classification().requiredApprovals()`. A confidential document with one approver cannot be built.
    * `publish(at)` returns a [`Published`](../src/main/java/io/github/chris013/practice/task12/Published.java) with the same approvers and `publishedAt = at`.
 4. **Rejected documents** ([`Rejected`](../src/main/java/io/github/chris013/practice/task12/Rejected.java))
    * The constructor enforces the rules that `reject` relies on: the reviewer is not the author (`four-eyes`), and the reason is not blank. A `Rejected` that breaks them cannot exist.
    * `revise(newContent)` returns a `Draft` with the new content and the same id and author. All earlier approvals are gone.
 5. **Published documents** ([`Published`](../src/main/java/io/github/chris013/practice/task12/Published.java))
-   * The approvers are copied with `Set.copyOf`. Zero approvers throws `IllegalArgumentException`.
+   * The approvers are copied with `Set.copyOf`.
+   * The constructor applies the same two rules as `Approved`: no author among the approvers (`four-eyes`), and enough approvers for the classification. Otherwise `IllegalArgumentException`.
    * `Published` has no transition methods. A published document is final.
 6. **Status line** ([`StatusLine`](../src/main/java/io/github/chris013/practice/task12/StatusLine.java))
    * `StatusLine.of(document)` returns exactly one of these lines:
@@ -143,7 +146,7 @@ Implement the transitions and the status line. The starter gives you the ids, `C
 
 ## How I'd approach it
 
-* **Write the state records first, then the transitions.** The compact constructors hold the rules that must always be true: non-null components, and the approver sets copied and non-empty. Once they are in place, the transition methods are short.
+* **Write the state records first, then the transitions.** The compact constructors hold the rules that must always be true: non-null components, the approver sets copied, and the four-eyes and approval-count rules checked. Once they are in place, the transition methods are short.
 * **Put the four-eyes rule where it can be broken.** `approve` is the place where a reviewer is added, so its check goes there. A `Rejected` can also be built directly, so the same check belongs in its constructor. Ask yourself which rules a caller must not be able to skip.
 * **The approval that completes the set changes the type.** Count the approvals after adding the reviewer. Below the threshold, return a new `InReview`. At the threshold, return an `Approved`. Do not add a boolean flag to `InReview` for this.
 * **How a caller handles `ReviewOutcome`.** The caller of `approve` must deal with both cases, and a `switch` makes the compiler check that:
@@ -173,6 +176,22 @@ error: cannot find symbol
 ```
 
 The bug that cost us a published document without approval cannot be written in code any more. A test would only catch it after someone wrote the bad line and ran the tests. The compiler catches it while you type.
+
+### Type-state or enum status?
+
+The task 08 approach keeps one class with a status enum and checks each transition at runtime. Here is how the two compare:
+
+| Question | Enum status + runtime checks (task 08) | Type-state (this task) |
+|---|---|---|
+| Illegal operation | Compiles. Fails at runtime with `IllegalStateException`. | Does not compile. |
+| Missing field in a state | Nullable field, checked by hand. | Field exists only on the state that has it. |
+| Number of types | One class plus an enum. | One type per state plus a sealed interface. |
+| Adding a new state | Add the enum value. Switch expressions without `default` fail to compile, but switch statements and if-guards in methods like `publish()` are not checked. | Add a record. Every exhaustive switch fails to compile until it is handled, and the new state has only the methods you give it. |
+| Persistence and ORMs | Easy: one table, one `status` column. | Harder: you map to one flat row and back with a switch (stretch goal 1). |
+| Loading from storage | Trivial. Every row has the same type. | You must decide what to do with an unknown status. |
+| Caller knows the state statically | Works, but the caller still has to check. | The caller's code only compiles for the states it can handle. |
+
+**When to choose which.** Choose **type-state** when the workflow runs inside one use case, and the code knows the state at each step: "take this draft, submit it, return the review". Choose **enum + guards** when objects are loaded generically from storage (a list page, a search, a batch job), and the code cannot know the state at compile time. In practice a hybrid is common: an enum column in the database, a mapper from the row to the type-state records, and the type-state rules in the domain code.
 
 ## Tests
 
@@ -220,7 +239,7 @@ Run: `mvn test -Dtest='**/task12/**'`
 
 **1. Each state is a record that implements `Document`, and the transitions live on the type they start from.** `Draft` has `submit` and `edit`. `Approved` has `publish`. `Published` has nothing. An operation that is illegal in a state is not on that state's type. The alternative, one `Document` class with a `status` enum and a method that throws `IllegalStateException` for the wrong status, is what the audit found broken: the check is a runtime rule that someone can forget.
 
-**2. The rules that must always hold go into the compact constructors.** `Approved` and `Published` reject an empty approver set. `Rejected` rejects a reviewer who is the author and a blank reason. Because the transition methods call these constructors, a rule in the constructor also holds for code that builds the record directly. The alternative, checking inside each transition method only, leaves a hole whenever a second code path creates the record.
+**2. The rules that must always hold go into the compact constructors.** `Approved` and `Published` reject an author among the approvers and fewer approvers than the classification requires, so a confidential document with one approval cannot be built. `InReview` rejects an author among its approvals and a set that already has enough approvals. `Rejected` rejects a reviewer who is the author and a blank reason. The rules for approvers live in one package-private helper, `Approvals`, so `Approved` and `Published` cannot drift apart. Because the transition methods call these constructors, a rule in the constructor also holds for code that builds the record directly. The alternative, checking inside each transition method only, leaves a hole whenever a second code path creates the record.
 
 **3. `approve` returns `ReviewOutcome`, and the type changes at the threshold.** `InReview.approve` counts the set after adding the reviewer. Below the required number it returns a new `InReview`. At the threshold it returns an `Approved`. The alternative, a boolean `isApproved` flag on `InReview`, would let an `InReview` with enough approvals exist, which is the illegal state we are trying to remove.
 
@@ -238,20 +257,6 @@ Run: `mvn test -Dtest='**/task12/**'`
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task12/StatusLine.java -->
 <!-- /embed -->
-
-### Enum status + runtime checks (task 08) vs. type-state
-
-| Question | Enum status + runtime checks (task 08) | Type-state (this task) |
-|---|---|---|
-| Illegal operation | Compiles. Fails at runtime with `IllegalStateException`. | Does not compile. |
-| Missing field in a state | Nullable field, checked by hand. | Field exists only on the state that has it. |
-| Number of types | One class plus an enum. | One type per state plus a sealed interface. |
-| Adding a new state | Add the enum value. Every `switch` without `default` warns, but a `default` hides it. | Add a record. Every exhaustive switch fails to compile until it is handled. |
-| Persistence and ORMs | Easy: one table, one `status` column. | Harder: you map to one flat row and back with a switch (stretch goal 1). |
-| Loading from storage | Trivial. Every row has the same type. | You must decide what to do with an unknown status. |
-| Caller knows the state statically | Works, but the caller still has to check. | The caller's code only compiles for the states it can handle. |
-
-**When to choose which.** Choose **type-state** when the workflow runs inside one use case, and the code knows the state at each step: "take this draft, submit it, return the review". Choose **enum + guards** when objects are loaded generically from storage (a list page, a search, a batch job), and the code cannot know the state at compile time. In practice a hybrid is common: an enum column in the database, a mapper from the row to the type-state records, and the type-state rules in the domain code.
 
 ### What I typically flag in first attempts
 

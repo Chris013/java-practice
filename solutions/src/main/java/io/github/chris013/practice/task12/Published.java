@@ -15,8 +15,6 @@ public record Published(DocumentId id, UserId author, Content content, Set<UserI
         Objects.requireNonNull(approvers, "approvers");
         Objects.requireNonNull(publishedAt, "publishedAt");
         approvers = Set.copyOf(approvers);
-        if (approvers.isEmpty()) {
-            throw new IllegalArgumentException("A published document needs at least one approver");
-        }
+        Approvals.checkApprovers(author, content, approvers);
     }
 }

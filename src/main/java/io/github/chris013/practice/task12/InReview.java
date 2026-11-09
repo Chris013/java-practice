@@ -5,6 +5,10 @@ import java.util.Set;
 
 /**
  * A document waiting for approvals. It is still open: more reviewers may approve it.
+ *
+ * <p>Rules, checked in the constructor: the author is not among the approvals (four-eyes principle), and there are
+ * fewer approvals than the classification requires. A review that has all its approvals is an {@link Approved}.
+ * The approvals are copied with {@code Set.copyOf}.
  */
 public record InReview(DocumentId id, UserId author, Content content, Instant submittedAt, Set<UserId> approvals)
         implements Document, ReviewOutcome {

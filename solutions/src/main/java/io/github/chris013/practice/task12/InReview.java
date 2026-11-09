@@ -19,6 +19,12 @@ public record InReview(DocumentId id, UserId author, Content content, Instant su
         Objects.requireNonNull(submittedAt, "submittedAt");
         Objects.requireNonNull(approvals, "approvals");
         approvals = Set.copyOf(approvals);
+        if (approvals.contains(author)) {
+            throw new IllegalArgumentException("The author cannot approve their own document (four-eyes principle)");
+        }
+        if (approvals.size() >= content.classification().requiredApprovals()) {
+            throw new IllegalArgumentException("A review with all required approvals is an Approved document");
+        }
     }
 
     /**

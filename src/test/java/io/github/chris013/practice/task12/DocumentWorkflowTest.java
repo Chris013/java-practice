@@ -248,6 +248,58 @@ class DocumentWorkflowTest {
                     .isInstanceOf(NullPointerException.class)
                     .hasMessageContaining("approvals");
         }
+
+        @Test
+        void an_approved_document_cannot_be_approved_by_its_author() {
+            assertThatThrownBy(() -> new Approved(ID, ANNA, PUBLIC_POLICY, Set.of(ANNA), REVIEWED))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("four-eyes");
+        }
+
+        @Test
+        void a_published_document_cannot_be_approved_by_its_author() {
+            assertThatThrownBy(() -> new Published(ID, ANNA, PUBLIC_POLICY, Set.of(ANNA), PUBLISHED))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("four-eyes");
+        }
+
+        @Test
+        void a_review_cannot_list_its_author_as_an_approver() {
+            assertThatThrownBy(() -> new InReview(ID, ANNA, CONFIDENTIAL_POLICY, SUBMITTED, Set.of(ANNA)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("four-eyes");
+        }
+
+        @Test
+        void a_confidential_approved_document_needs_two_approvers() {
+            assertThatThrownBy(() -> new Approved(ID, ANNA, CONFIDENTIAL_POLICY, Set.of(BEN), REVIEWED))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void a_confidential_published_document_needs_two_approvers() {
+            assertThatThrownBy(() -> new Published(ID, ANNA, CONFIDENTIAL_POLICY, Set.of(BEN), PUBLISHED))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void a_review_that_already_has_enough_approvals_cannot_be_built() {
+            assertThatThrownBy(() -> new InReview(ID, ANNA, PUBLIC_POLICY, SUBMITTED, Set.of(BEN)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void a_rejection_by_the_author_cannot_be_built_directly() {
+            assertThatThrownBy(() -> new Rejected(ID, ANNA, PUBLIC_POLICY, ANNA, "Wrong year", REVIEWED))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("four-eyes");
+        }
+
+        @Test
+        void a_rejection_without_a_reason_cannot_be_built_directly() {
+            assertThatThrownBy(() -> new Rejected(ID, ANNA, PUBLIC_POLICY, BEN, " ", REVIEWED))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Nested

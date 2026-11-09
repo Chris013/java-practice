@@ -25,7 +25,8 @@ import java.util.Set;
  * <ul>
  *   <li>lines change only while the order is a {@link OrderStatus#DRAFT draft};</li>
  *   <li>each product appears on at most one line, with 1 to 99 items;</li>
- *   <li>a non-draft order has at least one line and a total of at least {@link #MINIMUM_ORDER_VALUE};</li>
+ *   <li>an order that has left DRAFT through {@code place()} has at least one line and a total of at least
+ *       {@link #MINIMUM_ORDER_VALUE};</li>
  *   <li>the status only moves along DRAFT → PLACED → PAID → SHIPPED, or to CANCELLED before shipping.</li>
  * </ul>
  */

@@ -26,7 +26,7 @@ All three bugs have the same root cause: the rules are spread over many callers,
 |---|---|
 | **Aggregate** | A cluster of objects that change together and are treated as one unit for consistency. |
 | **Aggregate root** | The one object of the aggregate that outsiders may hold on to and call. Here: `Order`. `OrderLine` is only reachable through it. |
-| **Invariant** | A rule that is true after every public method returns. Example: a non-draft order has at least one line. |
+| **Invariant** | A rule that is true after every public method returns. Example: an order that has been placed has at least one line and a total of at least €15.00. |
 | **Entity vs value object** | An entity has an identity (`OrderId`) and can change over time. A value object has no identity and is defined by its values (`Money`, `OrderLine`). Value objects are immutable. |
 | **Typed ID** | A wrapper around a raw value, such as `OrderId(UUID)` or `CustomerId(String)`. The compiler stops you from passing a customer id where an order id is expected. |
 | **Domain event** | A fact about the past, named in the language of the business: `OrderPaid`, `OrderShipped`. Other parts of the system react to it. |
@@ -161,7 +161,7 @@ sequenceDiagram
     App->>Pub: publish each event
 ```
 
-The order of the last three steps matters. If we published before saving and the save failed, customers would get a "payment received" email for an order that does not exist in the database. Save first, then publish.
+The order of the last three steps matters. If we published before saving and the save failed, customers would get a "payment received" email although the database still says the order is unpaid. Save first, then publish. The reverse failure (saved, but the publish fails) loses the event; production systems close that gap with a transactional outbox, which writes the events into the same database transaction and publishes them afterwards.
 
 ## What I want from you
 
@@ -220,11 +220,11 @@ Make [`Order`](../src/main/java/io/github/chris013/practice/task08/Order.java) a
 * **Let `OrderLine` guard its own quantity.** A value object that can be built with a quantity of 0 is a value object that will eventually be built with a quantity of 0. Put the range check in the `OrderLine` constructor. Then every way of creating or changing a line, including the merge in `addProduct`, goes through the same check. This is what prevents the bug "validated on add, forgot after merging".
 * **Compute the total instead of storing it.** A field `total` has to be updated by every method that changes a line, and one forgotten update makes it drift. A method that sums the lines cannot drift. The sums are small, so the cost does not matter.
 * **Copy on the way out.** `lines()` returns `List.copyOf(...)`. Your `Order` keeps the real map, and nobody else can reach it. This is the fix for the "customer got coffee they never paid for" incident. The controller that called `getLines().add(...)` now gets an `UnsupportedOperationException` in its own code, and the order is not changed.
-* **Why `pullEvents` copies and then clears.** Return a copy of the events first, and only then clear the internal list. If you clear first and return the list you cleared, the caller holds a list that you no longer own and you have a bug waiting to happen. The copy is the thing you give away; the clear is the thing that makes "pulled once" true.
+* **Why `pullEvents` copies and then clears.** Never hand out the internal `events` list. If you return it and then clear it, the caller's list is emptied under their feet. If you return it without clearing, the caller holds a live view that changes with the next event. So copy first: the immutable copy is what you give away. Then clear: that is what makes "pulled once" true. Do it in the other order and the copy is empty.
 * **Why typed IDs?** `OrderId` and `CustomerId` are both strings or UUIDs under the hood. Without the wrapper, `new Order(customerId, orderId)` compiles and fails at 3 a.m. in production. With the wrapper, the compiler refuses. A few lines of code buy you a class of bugs that you can never hit.
 * **Why we don't validate in the controller.** The controller is one of three callers. If the rule lives there, two callers do not have it. Validation in the aggregate applies to every caller, present and future, including the batch job nobody remembers writing.
 * **Aggregate boundary: refer to other aggregates by id.** `Order` holds a `ProductId` and a `CustomerId`, never a `Product` or a `Customer` object. A reference to a whole other aggregate pulls its whole object graph into every transaction and makes it impossible to say which aggregate owns what.
-* **One transaction per aggregate.** A single `Order` is loaded, changed, saved and its events are published in one unit of work. If you find yourself wanting one transaction that changes an order *and* a warehouse stock level, that is a sign that you have two aggregates and an event between them.
+* **One transaction per aggregate.** A single `Order` is loaded, changed and saved in one transaction, and its events are published after that transaction commits. If you find yourself wanting one transaction that changes an order *and* a warehouse stock level, that is a sign that you have two aggregates and an event between them.
 * **Test the rules, not the getters.** The interesting tests are the ones where a rule is broken and the order must stay as it was. A test that asserts "nothing changed" after a rejected call is worth more than three tests for `id()`.
 
 ## Tests
@@ -302,6 +302,6 @@ Run: `mvn test -Dtest='**/task08/**'`
 | Validating the quantity only in `addProduct`, not after merging | Two adds of 60 each pass the check and produce a line of 120. Put the check in `OrderLine`. |
 | `IllegalArgumentException` and `IllegalStateException` used interchangeably | Callers and monitoring cannot tell "bad input" from "wrong moment". Follow the rule in *Effective Java* Item 72. |
 | Recording an `OrderCancelled` event for a draft | The event says the business cancelled an order that customers never placed. Draft cancellations stay silent. |
-| `equals` on `Order` comparing all fields | Two copies of the same order with a different line would be "different orders", and the same order would stop being equal to itself after a change. Entities are equal by identity, so compare by `OrderId` or leave the default identity equality. |
+| `equals` on `Order` comparing all fields | An entity's identity does not change when its state changes. With all-field `equals`, two copies of the same order with different lines count as different orders, and the `hashCode` changes after every mutation, so the order gets lost inside a `HashSet` or as a `HashMap` key. Compare by `OrderId`, or keep the default identity equality. |
 
 </details>

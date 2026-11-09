@@ -16,6 +16,12 @@ public final class LendingRefusedException extends RuntimeException {
         this.reason = reason;
     }
 
+    /** A refusal that was caused by a lower-level failure. The cause is kept, so the stack trace shows both. */
+    public LendingRefusedException(RefusalReason reason, Throwable cause) {
+        super(Objects.requireNonNull(reason, "reason").name(), cause);
+        this.reason = reason;
+    }
+
     public RefusalReason reason() {
         return reason;
     }

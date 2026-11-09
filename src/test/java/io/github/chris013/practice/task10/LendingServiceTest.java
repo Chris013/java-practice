@@ -2,6 +2,7 @@ package io.github.chris013.practice.task10;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
 import io.github.chris013.practice.task10.adapter.inmemory.InMemoryCatalog;
 import io.github.chris013.practice.task10.adapter.inmemory.InMemoryLoanRepository;
@@ -19,6 +20,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
@@ -51,22 +53,11 @@ class LendingServiceTest {
         catalog.add(C1, C2, C3, C4, C5, C6);
     }
 
-    /** Something that may throw; a lambda such as {@code () -> lending.borrow(ANNA, C1)}. */
-    @FunctionalInterface
-    private interface Action {
-        void run() throws Throwable;
-    }
-
-    /** Runs the action and returns the refusal reason; fails the test if the action succeeds. */
-    private static RefusalReason refusalOf(Action action) {
-        try {
-            action.run();
-        } catch (LendingRefusedException refusal) {
-            return refusal.reason();
-        } catch (Throwable other) {
-            throw new AssertionError("expected a refusal but got " + other, other);
-        }
-        throw new AssertionError("expected a refusal but the call succeeded");
+    /** Runs the call and returns the refusal reason; fails the test if the call does not refuse. */
+    private static RefusalReason refusalOf(ThrowingCallable call) {
+        LendingRefusedException refusal = catchThrowableOfType(LendingRefusedException.class, call);
+        assertThat(refusal).as("expected a LendingRefusedException").isNotNull();
+        return refusal.reason();
     }
 
     private void advanceDays(long days) {
@@ -137,6 +128,23 @@ class LendingServiceTest {
         }
 
         @Test
+        void counts_only_the_members_own_loans_towards_the_limit() {
+            for (CopyId copy : List.of(C1, C2, C3, C4, C5)) {
+                lending.borrow(CAROL, copy);
+            }
+
+            assertThat(lending.borrow(ANNA, C6).memberId()).isEqualTo(ANNA);
+        }
+
+        @Test
+        void ignores_overdue_loans_of_other_members() {
+            lending.borrow(CAROL, C1);
+            advanceDays(22); // Carol's loan is overdue, Anna's borrowing is not affected
+
+            assertThat(lending.borrow(ANNA, C2).memberId()).isEqualTo(ANNA);
+        }
+
+        @Test
         void allows_five_loans_but_refuses_a_sixth() {
             for (CopyId copy : List.of(C1, C2, C3, C4, C5)) {
                 lending.borrow(ANNA, copy);
@@ -204,11 +212,12 @@ class LendingServiceTest {
 
         @Test
         void closes_the_loan_without_a_fee_when_returned_on_time() {
-            lending.borrow(ANNA, C1);
+            Loan loan = lending.borrow(ANNA, C1);
             advanceDays(21); // returned on the due day
 
             var receipt = lending.giveBack(C1);
 
+            assertThat(receipt.loan()).isEqualTo(loan);
             assertThat(receipt.lateFee()).isEqualTo(new BigDecimal("0.00"));
             assertThat(receipt.returnedOn()).isEqualTo(LocalDate.of(2026, 3, 22));
             assertThat(loans.findActiveLoanOf(C1)).isEmpty();
@@ -281,6 +290,18 @@ class LendingServiceTest {
             advanceDays(22);
 
             assertThat(refusalOf(() -> lending.renew(C1))).isEqualTo(RefusalReason.RENEWAL_NOT_ALLOWED);
+        }
+
+        @Test
+        void keeps_the_domain_exception_as_the_cause_of_a_refused_renewal() {
+            lending.borrow(ANNA, C1);
+            advanceDays(22);
+
+            LendingRefusedException refusal =
+                    catchThrowableOfType(LendingRefusedException.class, () -> lending.renew(C1));
+
+            assertThat(refusal.reason()).isEqualTo(RefusalReason.RENEWAL_NOT_ALLOWED);
+            assertThat(refusal).hasCauseInstanceOf(IllegalStateException.class);
         }
     }
 }

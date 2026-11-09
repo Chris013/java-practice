@@ -5,7 +5,11 @@ import io.github.chris013.practice.task10.domain.Member;
 import io.github.chris013.practice.task10.domain.MemberId;
 import java.util.Optional;
 
-/** Keeps members in memory. Demo adapter and test double. Task 10: read {@code tasks/10-library-lending-hexagonal.md}. */
+/**
+ * Keeps members in memory. Demo adapter and test double.
+ *
+ * <p>Task 10: read {@code tasks/10-library-lending-hexagonal.md} first.
+ */
 public final class InMemoryMemberDirectory implements MemberDirectory {
 
     /** Adds a member, or replaces the one with the same id (useful to block someone in a test). */

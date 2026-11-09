@@ -83,8 +83,8 @@ public final class LendingService {
 
     /**
      * The domain refuses renewals with an IllegalStateException. The service translates that into the refusal
-     * type the desk, kiosk and app understand. The original exception is kept as suppressed, so nothing is lost
-     * when debugging.
+     * type the desk, kiosk and app understand. The original exception is kept as the cause, so the stack trace
+     * still shows why the domain refused.
      */
     public Loan renew(CopyId copyId) {
         Objects.requireNonNull(copyId, "copyId");
@@ -94,9 +94,7 @@ public final class LendingService {
         try {
             renewed = loan.renewedOn(LocalDate.now(clock));
         } catch (IllegalStateException rejected) {
-            LendingRefusedException refusal = refuse(RefusalReason.RENEWAL_NOT_ALLOWED);
-            refusal.addSuppressed(rejected);
-            throw refusal;
+            throw new LendingRefusedException(RefusalReason.RENEWAL_NOT_ALLOWED, rejected);
         }
         loans.save(renewed);
         return renewed;

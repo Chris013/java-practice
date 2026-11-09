@@ -18,6 +18,9 @@ import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.fail;
+
 /**
  * Guards the dependency rule with plain reflection, so nobody can quietly make the domain depend on the database
  * or the application depend on an adapter. It checks declarations only (superclass, interfaces, fields, constructor
@@ -46,9 +49,7 @@ class ArchitectureTest {
     void every_checked_layer_contains_classes() throws Exception {
         // Without this, a wrong package name would make every rule above pass without checking anything.
         for (String pkg : List.of(DOMAIN, APPLICATION, IN_MEMORY)) {
-            if (classesIn(pkg).isEmpty()) {
-                throw new AssertionError("no classes found in " + pkg + ", so the rules above would check nothing");
-            }
+            assertThat(classesIn(pkg)).as("classes in %s; without them the rules check nothing", pkg).isNotEmpty();
         }
     }
 
@@ -57,8 +58,7 @@ class ArchitectureTest {
             for (Class<?> used : referencedTypesOf(from)) {
                 String usedPackage = used.getPackageName();
                 if (usedPackage.equals(forbiddenPackage) || usedPackage.startsWith(forbiddenPackage + ".")) {
-                    throw new AssertionError("%s must not depend on %s, but it uses %s"
-                            .formatted(from.getName(), forbiddenPackage, used.getName()));
+                    fail("%s must not depend on %s, but it uses %s", from.getName(), forbiddenPackage, used.getName());
                 }
             }
         }

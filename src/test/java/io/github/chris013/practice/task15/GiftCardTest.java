@@ -25,7 +25,7 @@ class GiftCardTest {
         @ParameterizedTest
         @ValueSource(strings = {"", "123", "12345", "12a4", " 4711"})
         void rejects_a_pin_that_is_not_exactly_four_digits(String pin) {
-            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), pin, BigDecimal.TEN, LocalDate.now()))
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), pin, BigDecimal.TEN, LocalDate.of(2026, 12, 31)))
                     .isInstanceOf(IllegalArgumentException.class);
         }
 
@@ -51,11 +51,13 @@ class GiftCardTest {
 
         @Test
         void rejects_nulls() {
-            assertThatThrownBy(() -> new GiftCard(null, PIN, BigDecimal.TEN, LocalDate.now()))
+            assertThatThrownBy(() -> new GiftCard(null, PIN, BigDecimal.TEN, LocalDate.of(2026, 12, 31)))
                     .isInstanceOf(NullPointerException.class);
-            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), null, BigDecimal.TEN, LocalDate.now()))
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), null, BigDecimal.TEN, LocalDate.of(2026, 12, 31)))
                     .isInstanceOf(NullPointerException.class);
-            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), PIN, null, LocalDate.now()))
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), PIN, null, LocalDate.of(2026, 12, 31)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), PIN, BigDecimal.TEN, null))
                     .isInstanceOf(NullPointerException.class);
         }
     }

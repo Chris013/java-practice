@@ -115,7 +115,11 @@ Implement the classes below. The starter contains skeletons (`UnsupportedOperati
    * Save the card with the repository whenever its state changed: after the PIN check (the counter changed) and after a debit.
    * Use the injected `Clock` for "today". Never `LocalDate.now()` without a clock.
    * Every amount in a result has scale 2.
-6. **[`CashierMessages`](../src/main/java/io/github/chris013/practice/task15/CashierMessages.java)** has one static method `String forResult(RedemptionResult result)`. The texts are exact:
+6. **[`CashierMessages`](../src/main/java/io/github/chris013/practice/task15/CashierMessages.java)** has one static method `String forResult(RedemptionResult result)`.
+   * The switch is **exhaustive and has no `default` branch**.
+   * Amounts are shown with 2 decimals, so `12.5` is printed as `12.50`.
+
+   The texts are exact:
 
 | Result | Text |
 |---|---|
@@ -126,9 +130,6 @@ Implement the classes below. The starter contains skeletons (`UnsupportedOperati
 | `CARD_BLOCKED` | `Gift card blocked after too many wrong PINs. Refer the customer to the service desk.` |
 | `EXPIRED` | `Gift card expired.` |
 | `EMPTY` | `Gift card has no balance left.` |
-
-   * The switch is **exhaustive and has no `default` branch**.
-   * Amounts are shown with 2 decimals, so `12.5` is printed as `12.50`.
 
 ## Constraints & non-goals
 
@@ -160,6 +161,29 @@ Implement the classes below. The starter contains skeletons (`UnsupportedOperati
 
 **Why exhaustiveness and no `default` matter.** Suppose someone adds `CARD_NOT_ACTIVATED` to `DeclineReason`. With no `default`, `CashierMessages` stops compiling. The developer must write the message, and the build tells them where. With `default -> "Unknown error"`, it compiles, and the cashier sees "Unknown error" in production. That is the exact bug from the situation section. Exhaustiveness only protects you if you let it.
 
+**What the caller looks like, before and after.** Before, every caller had to know all five exceptions:
+
+```java
+// before
+try {
+    service.redeem(code, pin, amount);
+    screen.show("Paid ...");
+} catch (CardNotFoundException e) { screen.show("Gift card not found..."); }
+  catch (WrongPinException e)     { screen.show("Wrong PIN..."); }
+  catch (CardBlockedException e)  { ... }
+  catch (CardExpiredException e)  { ... }
+  catch (EmptyCardException e)    { ... }
+```
+
+After, the caller passes the result to one function:
+
+```java
+// after
+screen.show(CashierMessages.forResult(service.redeem(code, pin, amount)));
+```
+
+The switch inside `CashierMessages` is the single place where the compiler checks that every outcome is handled.
+
 **Why not `Optional`, `boolean` or a `getLastError()` method?**
 * `Optional<Redeemed>` says "it worked or it didn't", and loses the reason. The caller cannot tell a wrong PIN from an unknown card.
 * A `boolean` has the same problem, and a `getLastError()` method is worse: the error is hidden state that another call can overwrite, and nothing forces the caller to look at it.
@@ -188,7 +212,7 @@ Test files:
 * [`GiftCardTest`](../src/test/java/io/github/chris013/practice/task15/GiftCardTest.java): construction, PIN attempts, debit.
 * [`GiftCardServiceTest`](../src/test/java/io/github/chris013/practice/task15/GiftCardServiceTest.java): every outcome, check order, expiry boundary, saves and programming errors. It uses a fixed `Clock`.
 * [`CashierMessagesTest`](../src/test/java/io/github/chris013/practice/task15/CashierMessagesTest.java): every message, exact text.
-* [`CountingGiftCardRepository`](../src/test/java/io/github/chris013/practice/task15/CountingGiftCardRepository.java) is a small fake that counts saves. The in-memory repository keeps the same object, so a test cannot see a missing save without counting it.
+* [`CountingGiftCardRepository`](../src/test/java/io/github/chris013/practice/task15/CountingGiftCardRepository.java) is a small fake that counts saves and remembers the balance written by the last save. The in-memory repository keeps the same object, so a test cannot see a missing save without counting it.
 
 <details>
 <summary>Show the tests</summary>
@@ -249,7 +273,7 @@ Test files:
 
 **6. Scale normalisation in one place.** `GiftCard.requireCents` rejects more than 2 decimals and returns scale 2. The service calls it on the amount, and the entity calls it on the balance and on every debit. `equals` on `BigDecimal` would make `12.5` and `12.50` different, so every comparison uses `compareTo`.
 
-**7. An exhaustive nested switch for the reasons.** `CashierMessages` uses `case Declined(DeclineReason reason)` and then a switch over the enum. The alternative `case Declined(var reason) when reason == WRONG_PIN` is shorter, but it stops being exhaustive as soon as you write the second guard. A plain switch over the enum is checked by the compiler.
+**7. An exhaustive nested switch for the reasons.** `CashierMessages` uses `case Declined(DeclineReason reason)` and then a switch over the enum. The alternative, `case Declined(var reason) when reason == WRONG_PIN -> …` once for each reason, reads well. But the compiler ignores guarded cases when it checks exhaustiveness, so you still need a final unguarded `case Declined d ->`. That is a `default` in disguise: a new reason falls into it silently. A nested switch over the enum keeps the compiler on your side.
 
 **8. Messages never echo the secret.** The PIN and the code are not in any exception message. Logs and monitoring tools collect messages, and a PIN in a log line is a leak.
 
@@ -276,6 +300,7 @@ Test files:
 | `redeem` returns `Declined` but the debit happened before the expiry check | Money is taken from a card that is then declined. Debit only after every check passes. |
 | The wrong-PIN counter is not saved when the PIN is wrong | The next request starts counting from zero, so the card is never blocked. |
 | `balance.equals(amount)` to choose `Redeemed` or `PartiallyRedeemed` | `12.5` and `12.50` are not `equals`. Compare with `compareTo`. |
+| `catch (Exception e)` around `redeem` | It also catches `NullPointerException` and other bugs, and shows them as a declined card. This is the bug from the situation section. Catch nothing here, and let programming errors reach the global error handler. |
 | `"Wrong PIN " + pin` in an exception message | The PIN ends up in the logs. Never put secrets in messages. |
 | `Optional<RedemptionResult>` or a `boolean` plus `getLastError()` | The reason is lost, or it lives in hidden state that can be overwritten. |
 

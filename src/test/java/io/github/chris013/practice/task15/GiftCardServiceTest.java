@@ -166,10 +166,27 @@ class GiftCardServiceTest {
         @Test
         void a_wrong_pin_is_reported_before_expiry_and_still_counts() {
             giveCard("20.00", TODAY.minusDays(1));
+            GiftCardService service = service();
 
-            RedemptionResult result = service().redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            assertThat(repository.saveCount()).isEqualTo(1);
 
-            assertThat(result).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.CARD_BLOCKED));
+        }
+
+        @Test
+        void a_right_pin_on_an_expired_card_resets_the_counter_and_is_saved() {
+            giveCard("20.00", TODAY.minusDays(1));
+            GiftCardService service = service();
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+
+            assertThat(service.redeem(CODE, PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.EXPIRED));
+            assertThat(repository.saveCount()).isEqualTo(3);
+
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
         }
 
         @Test
@@ -208,6 +225,7 @@ class GiftCardServiceTest {
             service().redeem(CODE, PIN, BigDecimal.ONE);
 
             assertThat(repository.saveCount()).isPositive();
+            assertThat(repository.lastSavedBalance()).isEqualByComparingTo("19.00");
             assertThat(balanceOnCard()).isEqualByComparingTo("19.00");
         }
 

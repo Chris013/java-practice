@@ -118,6 +118,8 @@ class CouponServiceTest {
                 "PERCENT|10|20.00|4.90|22.90",
                 // 20.00 - 5 = 15.00; + 4.90 = 19.90
                 "FIXED|5|20.00|4.90|19.90",
+                // 20.00 - 20 = 0.00; + 4.90 = 4.90
+                "FIXED|20|20.00|4.90|4.90",
                 // 20.00 - 25 is negative, so the total becomes 0.00; + 4.90 = 4.90
                 "FIXED|25|20.00|4.90|4.90",
                 // shipping is waived, so the total is unchanged

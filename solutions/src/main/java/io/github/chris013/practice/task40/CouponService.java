@@ -4,12 +4,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
-import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiFunction;
@@ -39,17 +36,11 @@ public final class CouponService {
     private static final Predicate<String> NOT_STARTING_WITH_DIGIT =
             code -> !code.isEmpty() && !isDigit(code.charAt(0));
     private static final Predicate<String> NOT_BLOCKLISTED = code -> !BLOCKLIST.contains(code);
-    // and() short-circuits in the order written, so the length check runs before charAt(0) can fail.
+    // The isEmpty() guard above makes NOT_STARTING_WITH_DIGIT safe on its own, whatever the order here.
     private static final Predicate<String> VALID_CODE = LENGTH_6_TO_12
             .and(ONLY_UPPER_CASE_AND_DIGITS)
             .and(NOT_STARTING_WITH_DIGIT)
             .and(NOT_BLOCKLISTED);
-
-    /**
-     * One rule per type, in an {@code EnumMap}. A switch on the enum would also work, but javac compiles it
-     * to a synthetic {@code CouponService$1} class, which is exactly the kind of class this refactoring removes.
-     */
-    private static final Map<DiscountType, DiscountRule> RULES = buildRules();
 
     private static final Comparator<Coupon> DISPLAY_ORDER = Comparator.comparing(Coupon::type)
             .thenComparing(Coupon::value, Comparator.reverseOrder())
@@ -124,30 +115,25 @@ public final class CouponService {
             boolean chargesShipping) {
     }
 
-    private static Map<DiscountType, DiscountRule> buildRules() {
-        Map<DiscountType, DiscountRule> rules = new EnumMap<>(DiscountType.class);
-        rules.put(DiscountType.PERCENT, new DiscountRule(
-                percent -> percent.compareTo(BigDecimal.ONE) >= 0 && percent.compareTo(HUNDRED) <= 0,
-                (total, percent) -> total.subtract(percentOf(total, percent)),
-                true));
-        rules.put(DiscountType.FIXED, new DiscountRule(
-                amount -> amount.signum() > 0,
-                (total, amount) -> total.subtract(amount).max(BigDecimal.ZERO),
-                true));
-        rules.put(DiscountType.FREE_SHIPPING, new DiscountRule(
-                value -> value.signum() == 0,
-                (total, ignored) -> total,
-                false));
-        return Collections.unmodifiableMap(rules);
-    }
-
+    /**
+     * One rule per type. A switch expression without {@code default} is exhaustive: if someone adds a
+     * {@code DiscountType} constant, this method stops compiling until the new type has a rule.
+     */
     private static DiscountRule ruleFor(DiscountType type) {
-        DiscountRule rule = RULES.get(type);
-        if (rule == null) {
-            // Only reachable if someone adds a DiscountType constant without adding its rule above.
-            throw new IllegalStateException("No rule for " + type);
-        }
-        return rule;
+        return switch (type) {
+            case PERCENT -> new DiscountRule(
+                    percent -> percent.compareTo(BigDecimal.ONE) >= 0 && percent.compareTo(HUNDRED) <= 0,
+                    (total, percent) -> total.subtract(percentOf(total, percent)),
+                    true);
+            case FIXED -> new DiscountRule(
+                    amount -> amount.signum() > 0,
+                    (total, amount) -> total.subtract(amount).max(BigDecimal.ZERO),
+                    true);
+            case FREE_SHIPPING -> new DiscountRule(
+                    value -> value.signum() == 0,
+                    (total, ignored) -> total,
+                    false);
+        };
     }
 
     private static BigDecimal percentOf(BigDecimal total, BigDecimal percent) {

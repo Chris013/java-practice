@@ -14,6 +14,7 @@ public final class JsonMapper {
      *
      * @throws IllegalArgumentException for NaN or infinite numbers, non-String map keys, unsupported
      *     types and cycles
+     * @throws IllegalStateException if a record accessor throws; the exception is the cause
      */
     public static JsonValue toJson(Object value) {
         throw new UnsupportedOperationException("TODO: Task 30");

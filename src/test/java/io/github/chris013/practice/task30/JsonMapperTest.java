@@ -12,10 +12,12 @@ import java.math.BigInteger;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -42,13 +44,57 @@ class JsonMapperTest {
     record Fragile(String name) {
         @Override
         public String name() {
-            throw new IllegalStateException("boom");
+            throw new ArithmeticException("boom");
         }
     }
 
     record Node(List<Object> children) {}
 
     enum Colour { RED, GREEN }
+
+    // Equality ignores the children, so a child can be equal to its parent without being the same object.
+    record Tag(String name, List<Object> children) {
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof Tag t && t.name.equals(name);
+        }
+
+        @Override
+        public int hashCode() {
+            return name.hashCode();
+        }
+    }
+
+    record Tags(String owner) implements Iterable<String> {
+        @Override
+        public Iterator<String> iterator() {
+            return List.of("x").iterator();
+        }
+    }
+
+    enum Shade implements CharSequence {
+        DARK;
+
+        @Override
+        public int length() {
+            return 4;
+        }
+
+        @Override
+        public char charAt(int index) {
+            return "dark".charAt(index);
+        }
+
+        @Override
+        public CharSequence subSequence(int start, int end) {
+            return "dark".subSequence(start, end);
+        }
+
+        @Override
+        public String toString() {
+            return "Dark shade";
+        }
+    }
 
     @Nested
     class Scalars {
@@ -118,6 +164,12 @@ class JsonMapperTest {
         }
 
         @Test
+        void writes_an_enum_that_is_also_a_char_sequence_as_its_name() {
+            assertThat(Shade.DARK.toString()).isEqualTo("Dark shade");
+            assertThat(JsonMapper.toJson(Shade.DARK)).isEqualTo(str("DARK"));
+        }
+
+        @Test
         void maps_java_time_values_to_their_to_string_text() {
             assertThat(JsonMapper.toJson(LocalDate.of(2024, 3, 1))).isEqualTo(str("2024-03-01"));
             assertThat(JsonMapper.toJson(Instant.parse("2024-03-01T10:15:30Z")))
@@ -138,6 +190,13 @@ class JsonMapperTest {
             assertThatThrownBy(() -> JsonMapper.toJson(Thread.currentThread()))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessage("unsupported type: java.lang.Thread");
+        }
+
+        @Test
+        void rejects_other_number_subclasses_such_as_atomic_integer() {
+            assertThatThrownBy(() -> JsonMapper.toJson(new AtomicInteger(1)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("unsupported type: java.util.concurrent.atomic.AtomicInteger");
         }
     }
 
@@ -241,9 +300,7 @@ class JsonMapperTest {
         void surfaces_an_accessor_failure_with_the_original_exception_as_cause() {
             assertThatThrownBy(() -> JsonMapper.toJson(new Fragile("x")))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasCauseInstanceOf(IllegalStateException.class)
-                    .cause()
-                    .hasMessage("boom");
+                    .hasCauseInstanceOf(ArithmeticException.class);
         }
 
         @Test
@@ -252,6 +309,11 @@ class JsonMapperTest {
 
             assertThat(JsonMapper.toJson(new Pair(shared, shared)))
                     .isEqualTo(object("first", array(str("a")), "second", array(str("a"))));
+        }
+
+        @Test
+        void writes_a_record_that_is_also_iterable_as_an_object() {
+            assertThat(JsonMapper.toJson(new Tags("ada"))).isEqualTo(object("owner", str("ada")));
         }
     }
 
@@ -290,10 +352,66 @@ class JsonMapperTest {
         }
 
         @Test
-        void two_equal_lists_that_are_different_objects_are_not_a_cycle() {
+        void two_equal_sibling_lists_are_both_written() {
             var outer = List.of(List.of("x"), List.of("x"));
 
             assertThat(JsonMapper.toJson(outer)).isEqualTo(array(array(str("x")), array(str("x"))));
+        }
+
+        @Test
+        void a_nested_container_equal_to_its_parent_is_not_a_cycle() {
+            var value = JsonMapper.toJson(new Tag("a", List.of(new Tag("a", List.of()))));
+
+            assertThat(Json.write(value))
+                    .isEqualTo("{\"name\":\"a\",\"children\":[{\"name\":\"a\",\"children\":[]}]}");
+        }
+    }
+
+    @Nested
+    class TaskExample {
+
+        record ExampleCustomer(@JsonName("customer_id") String id, String name) {}
+
+        record ExamplePayment(BigDecimal amount, String currency, Optional<String> note) {}
+
+        record ExampleAuditEvent(
+                String type, LocalDate day, ExampleCustomer customer, List<ExamplePayment> payments) {}
+
+        private ExampleAuditEvent event() {
+            return new ExampleAuditEvent("refund", LocalDate.of(2024, 3, 1),
+                    new ExampleCustomer("c-42", "Ada \"the\" Coder"),
+                    List.of(new ExamplePayment(new BigDecimal("12.50"), "EUR", Optional.empty()),
+                            new ExamplePayment(new BigDecimal("3"), "EUR", Optional.of("goodwill"))));
+        }
+
+        @Test
+        void compact_output_is_one_line() {
+            assertThat(Json.write(JsonMapper.toJson(event()))).isEqualTo("""
+                    {"type":"refund","day":"2024-03-01","customer":{"customer_id":"c-42","name":"Ada \\\"the\\\" Coder"},"payments":[{"amount":12.50,"currency":"EUR"},{"amount":3,"currency":"EUR","note":"goodwill"}]}""");
+        }
+
+        @Test
+        void pretty_output_matches_the_task_example() {
+            assertThat(Json.writePretty(JsonMapper.toJson(event()))).isEqualTo("""
+                    {
+                      "type": "refund",
+                      "day": "2024-03-01",
+                      "customer": {
+                        "customer_id": "c-42",
+                        "name": "Ada \\\"the\\\" Coder"
+                      },
+                      "payments": [
+                        {
+                          "amount": 12.50,
+                          "currency": "EUR"
+                        },
+                        {
+                          "amount": 3,
+                          "currency": "EUR",
+                          "note": "goodwill"
+                        }
+                      ]
+                    }""");
         }
     }
 }

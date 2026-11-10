@@ -73,7 +73,7 @@ flowchart TD
     B -->|yes| R1[JsonNull]
     B -->|no| C{Is it a JsonValue}
     C -->|yes| R2[Returned unchanged]
-    C -->|no| D{Boolean or Number}
+    C -->|no| D{Boolean or a supported number type}
     D -->|yes| R3[JsonBoolean or JsonNumber]
     D -->|no| E{Character or Enum}
     E -->|yes| R4[JsonString]
@@ -97,14 +97,14 @@ flowchart TD
 This is the event we write for a refund. Note the escaped quotes in the customer name, the renamed `customer_id`, and the omitted `note` of the first payment.
 
 ```java
-record Customer(@JsonName("customer_id") String id, String name) {}
-record Payment(BigDecimal amount, String currency, Optional<String> note) {}
-record AuditEvent(String type, LocalDate day, Customer customer, List<Payment> payments) {}
+record ExampleCustomer(@JsonName("customer_id") String id, String name) {}
+record ExamplePayment(BigDecimal amount, String currency, Optional<String> note) {}
+record ExampleAuditEvent(String type, LocalDate day, ExampleCustomer customer, List<ExamplePayment> payments) {}
 
-var event = new AuditEvent("refund", LocalDate.of(2024, 3, 1),
-        new Customer("c-42", "Ada \"the\" Coder"),
-        List.of(new Payment(new BigDecimal("12.50"), "EUR", Optional.empty()),
-                new Payment(new BigDecimal("3"), "EUR", Optional.of("goodwill"))));
+var event = new ExampleAuditEvent("refund", LocalDate.of(2024, 3, 1),
+        new ExampleCustomer("c-42", "Ada \"the\" Coder"),
+        List.of(new ExamplePayment(new BigDecimal("12.50"), "EUR", Optional.empty()),
+                new ExamplePayment(new BigDecimal("3"), "EUR", Optional.of("goodwill"))));
 
 Json.write(JsonMapper.toJson(event));
 ```
@@ -157,17 +157,17 @@ Implement [`Json`](../src/main/java/io/github/chris013/practice/task30/Json.java
 **The mapper (`JsonMapper.toJson(Object)`)**
 
 5. `null` becomes `JsonNull`. A `JsonValue` is returned as it is.
-6. `Boolean` becomes `JsonBoolean`. `Integer`, `Long`, `Short`, `Byte`, `BigInteger` and `BigDecimal` become an exact `JsonNumber`.
+6. `Boolean` becomes `JsonBoolean`. `Integer`, `Long`, `Short`, `Byte`, `BigInteger` and `BigDecimal` become an exact `JsonNumber`. Other `Number` subclasses, such as `AtomicInteger`, are unsupported.
 7. `Double` and `Float` become a number with their decimal text. A `Float` uses `Float.toString`, so `0.1f` prints as `0.1` and not as `0.10000000149011612`. `NaN` and infinite values throw `IllegalArgumentException`, because JSON has no such numbers.
-8. A `CharSequence` becomes a `JsonString`. A `Character` becomes a one-character string. An enum becomes its `name()`.
+8. A `CharSequence` becomes a `JsonString`. A `Character` becomes a one-character string. An enum becomes its `name()`, even if the enum also implements `CharSequence`.
 9. A `java.time` value (for example `LocalDate` or `Instant`) becomes its `toString()` text.
 10. `Optional` maps its value. An empty `Optional` becomes `JsonNull`. The same rule applies at the top level and in lists.
-11. A record becomes a `JsonObject` with its components in declaration order. The member name is the value of [`@JsonName`](../src/main/java/io/github/chris013/practice/task30/JsonName.java) if the component has it, and the component name otherwise.
+11. A record becomes a `JsonObject` with its components in declaration order, even if the record also implements `Iterable` or `Map`. The member name is the value of [`@JsonName`](../src/main/java/io/github/chris013/practice/task30/JsonName.java) if the component has it, and the component name otherwise.
 12. A record component that holds `Optional.empty()` is **left out** of the object. A `null` component is written as `null`. Two components with the same JSON name throw `IllegalArgumentException`.
 13. Arrays (including primitive arrays such as `int[]`) and `Iterable`s become a `JsonArray`. Inside a list, an empty `Optional` is `null` and is not left out.
 14. A `Map` becomes a `JsonObject` in iteration order. Every key must be a `String`; otherwise throw `IllegalArgumentException` and name the key's class.
 15. Anything else throws `IllegalArgumentException` with the message `unsupported type: <class name>`.
-16. **Cycles.** A container that contains itself, directly or through other containers, throws `IllegalArgumentException("cycle detected")`. Use identity, not equality, to decide whether a container is the same one. Two equal lists that are different objects are not a cycle. The same list in two places side by side is not a cycle either.
+16. **Cycles.** A container that contains itself, directly or through other containers, throws `IllegalArgumentException("cycle detected")`. Use identity, not equality, to decide whether a container is the same one. Two equal lists that are different objects are not a cycle. A container that is only equal to one of its ancestors is not a cycle either. The same list in two places side by side is not a cycle either.
 17. If a record accessor throws, the mapper throws `IllegalStateException` and passes the accessor's exception as the cause.
 
 ## Constraints & non-goals
@@ -185,7 +185,7 @@ Implement [`Json`](../src/main/java/io/github/chris013/practice/task30/Json.java
 * The pretty printer and the compact printer share one method. Pass a flag or a small "layout" value and let one helper write a newline plus indentation only when pretty output is on. Two separate printers drift apart over time.
 * The `switch` in the printer needs no `default`. Read the compiler's error when a case is missing. That error is what the sealed hierarchy is for.
 * In the mapper, decide the order of the checks before you write the `switch`. The flowchart above is one reasonable answer. Think about what happens to a record that implements `Iterable`, and why you would rather write it as an object.
-* For cycle detection, keep a set of containers that are **on the current path**. Add before you descend, remove when you come back. If you never remove, two equal sibling lists look like a cycle. Use `Collections.newSetFromMap(new IdentityHashMap<>())`. A `HashSet` uses `equals` and `hashCode`, so it would treat two equal lists as the same container. Hashing a list that contains itself also recurses forever.
+* For cycle detection, keep a set of containers that are **on the current path**. Add before you descend, remove when you come back. If you never remove, the same list in two places side by side looks like a cycle. Use `Collections.newSetFromMap(new IdentityHashMap<>())`. The rejected alternative is a `HashSet`. It calls `hashCode`, which never returns for a list that contains itself (`StackOverflowError` instead of our exception), and it treats a container that is merely equal to one of its ancestors as a cycle.
 * Reading a record: `Class#getRecordComponents()` returns the components in declaration order. Each `RecordComponent` gives you `getName()`, `getAccessor()` and `getAnnotation(...)`. Use the accessor for the value.
 * An exception from an accessor arrives wrapped in `InvocationTargetException`. Unwrap it with `getCause()` before you rethrow, so the stack trace points at the real problem.
 * The tests use [`JsonFixtures`](../src/test/java/io/github/chris013/practice/task30/JsonFixtures.java), small helpers that build the expected values. Read them first; they make the other tests short.
@@ -250,7 +250,7 @@ Many tests fail on the starter, because `Json` and `JsonMapper` still throw `Uns
 4. **Ordered `switch` in the mapper, not a visitor.**
    The mapper must accept types we do not own (`BigDecimal`, `Optional`, arrays). A visitor works only for types we control. The cost is that the order of the cases matters, and the Javadoc says so.
 5. **Identity set for the current path.**
-   `IdentityHashMap` answers "is this the same object". Removing the container when its conversion finishes keeps sibling reuse legal. The rejected alternative was a `HashSet` with `equals`, which treats two equal lists as a cycle.
+   `IdentityHashMap` answers "is this the same object". Removing the container when its conversion finishes keeps sibling reuse legal. The rejected alternative was a `HashSet`. It calls `hashCode`, which never returns for a list that contains itself (`StackOverflowError` instead of our exception), and it treats a container that is merely equal to one of its ancestors as a cycle.
 6. **Records are read through `getRecordComponents()`, and an accessor failure keeps its cause.**
    The component order is the declaration order, and `@JsonName` is read from the component itself. A failing accessor is wrapped in an `IllegalStateException` whose cause is the original exception, so nothing is lost.
 
@@ -274,7 +274,7 @@ Many tests fail on the starter, because `Json` and `JsonMapper` still throw `Uns
 | Escaping `/` or non-ASCII "to be safe" | The RFC does not require it, and the output becomes harder to read in the logs. |
 | `Double.toString` or `String.valueOf(double)` for numbers | Prints `1.0E10`, which is valid JSON but not what a reader expects. `BigDecimal` with `toPlainString` avoids this. |
 | `getDeclaredFields()` instead of record components | Field order is not guaranteed, and fields miss the `@JsonName` annotation that is on the component. |
-| A `HashSet` for cycle detection | Equal containers look like the same container, so two equal sibling lists are rejected. |
+| A `HashSet` for cycle detection | It calls `hashCode`, which never returns for a list that contains itself, and it treats a container that is merely equal to one of its ancestors as a cycle. |
 | Cycle set not cleaned up on the way back | The same list in two places side by side is reported as a cycle. |
 | Printing `NaN` or `Infinity` as text | Neither is a JSON number. Reject them with an exception, as the contract says. |
 

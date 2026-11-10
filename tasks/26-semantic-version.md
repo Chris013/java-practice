@@ -161,15 +161,591 @@ The test classes:
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task26/SemanticVersionParsingTest.java -->
+**[`SemanticVersionParsingTest.java`](../src/test/java/io/github/chris013/practice/task26/SemanticVersionParsingTest.java)**
+
+```java
+package io.github.chris013.practice.task26;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class SemanticVersionParsingTest {
+
+    @Nested
+    class Valid {
+
+        @ParameterizedTest
+        @CsvSource({
+            "0.0.0",
+            "1.2.3",
+            "10.20.30",
+            "2147483647.2147483647.2147483647",
+            "1.0.0-alpha",
+            "1.0.0-alpha.1",
+            "1.0.0-0.3.7",
+            "1.0.0-x.7.z.92",
+            "1.0.0-0A.is.legal",
+            "1.0.0-x-y-z.--",
+            "1.0.0-alpha.123456789012345678901234567890.beta-gamma.1",
+            "1.0.0+20130313144700",
+            "1.0.0-beta+exp.sha.5114f85",
+            "1.0.0+21AF26D3----117B344092BD",
+            "1.0.0+001",
+        })
+        void parses_and_prints_the_same_text(String text) {
+            assertThat(SemanticVersion.parse(text)).hasToString(text);
+        }
+
+        @Test
+        void printed_text_parses_back_to_an_equal_version() {
+            List<SemanticVersion> versions = List.of(
+                    new SemanticVersion(1, 0, 0, List.of("rc", "1"), List.of("build", "7")),
+                    SemanticVersion.of(0, 0, 0),
+                    new SemanticVersion(1, 2, 3, List.of(), List.of("001")));
+
+            for (SemanticVersion version : versions) {
+                assertThat(SemanticVersion.parse(version.toString())).as(version.toString()).isEqualTo(version);
+            }
+        }
+
+        @Test
+        void exposes_each_part() {
+            SemanticVersion version = SemanticVersion.parse("1.2.3-rc.1+build.7");
+
+            assertThat(version.major()).isEqualTo(1);
+            assertThat(version.minor()).isEqualTo(2);
+            assertThat(version.patch()).isEqualTo(3);
+            assertThat(version.preRelease()).containsExactly("rc", "1");
+            assertThat(version.build()).containsExactly("build", "7");
+        }
+
+        @Test
+        void of_builds_a_stable_version_without_metadata() {
+            SemanticVersion version = SemanticVersion.of(1, 2, 3);
+
+            assertThat(version).isEqualTo(SemanticVersion.parse("1.2.3"));
+            assertThat(version.preRelease()).isEmpty();
+            assertThat(version.build()).isEmpty();
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "1.2.3, false, true",
+            "0.9.0, false, false",
+            "1.0.0+build, false, true",
+            "1.0.0-rc.1, true, false",
+            "2.0.0-rc.1, true, false",
+        })
+        void tells_pre_releases_and_stable_versions_apart(String text, boolean preRelease, boolean stable) {
+            SemanticVersion version = SemanticVersion.parse(text);
+
+            assertThat(version.isPreRelease()).isEqualTo(preRelease);
+            assertThat(version.isStable()).isEqualTo(stable);
+        }
+    }
+
+    @Nested
+    class Invalid {
+
+        // Column 1 is the input, column 2 a fragment of the message. The input is quoted so that spaces survive.
+        @ParameterizedTest
+        @CsvSource(delimiter = '|', quoteCharacter = '"', value = {
+            "\"\"|version is empty",
+            "1.2|expected three numbers",
+            "1.2.3.4|expected three numbers",
+            "v1.2.3|invalid character 'v' in major",
+            "01.2.3|leading zero in major",
+            "1.2.3-|empty pre-release identifier",
+            "1.2.3-01|leading zero in pre-release identifier '01'",
+            "1.2.3-a..b|empty pre-release identifier",
+            "1.2.3+|empty build identifier",
+            "1.2.3-a$|invalid character '$' in pre-release identifier",
+            "99999999999.0.0|major is too large",
+            "\" 1.2.3\"|invalid character ' ' in major",
+        })
+        void rejects_the_text_and_says_what_is_wrong(String text, String reason) {
+            assertThatThrownBy(() -> SemanticVersion.parse(text))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("'" + text + "'")
+                    .hasMessageContaining(reason);
+        }
+
+        @Test
+        void rejects_null() {
+            assertThatThrownBy(() -> SemanticVersion.parse(null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Construction {
+
+        @Test
+        void rejects_a_negative_number() {
+            assertThatThrownBy(() -> new SemanticVersion(-1, 0, 0, List.of(), List.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> SemanticVersion.of(0, 0, -1)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_leading_zero_in_a_numeric_pre_release_identifier() {
+            assertThatThrownBy(() -> new SemanticVersion(1, 0, 0, List.of("01"), List.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void allows_a_leading_zero_in_build_metadata() {
+            assertThat(new SemanticVersion(1, 0, 0, List.of(), List.of("007")).build()).containsExactly("007");
+        }
+
+        @Test
+        void rejects_null_components() {
+            assertThatThrownBy(() -> new SemanticVersion(1, 0, 0, null, List.of()))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new SemanticVersion(1, 0, 0, List.of(), null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void copies_the_lists_so_later_changes_do_not_leak_in() {
+            List<String> preRelease = new ArrayList<>(List.of("rc"));
+            SemanticVersion version = new SemanticVersion(1, 0, 0, preRelease, List.of());
+
+            preRelease.add("2");
+
+            assertThat(version.preRelease()).containsExactly("rc");
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task26/SemanticVersionOrderingTest.java -->
+**[`SemanticVersionOrderingTest.java`](../src/test/java/io/github/chris013/practice/task26/SemanticVersionOrderingTest.java)**
+
+```java
+package io.github.chris013.practice.task26;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class SemanticVersionOrderingTest {
+
+    /** The example chain from SemVer section 11.4, lowest first. */
+    private static final List<String> SEMVER_CHAIN = List.of(
+            "1.0.0-alpha",
+            "1.0.0-alpha.1",
+            "1.0.0-alpha.beta",
+            "1.0.0-beta",
+            "1.0.0-beta.2",
+            "1.0.0-beta.11",
+            "1.0.0-rc.1",
+            "1.0.0");
+
+    private static SemanticVersion v(String text) {
+        return SemanticVersion.parse(text);
+    }
+
+    private static List<SemanticVersion> chain() {
+        return SEMVER_CHAIN.stream().map(SemanticVersion::parse).toList();
+    }
+
+    @Nested
+    class Precedence {
+
+        @Test
+        void follows_the_semver_example_chain() {
+            List<SemanticVersion> versions = chain();
+
+            assertThat(versions).isSorted();
+            assertThat(versions).doesNotHaveDuplicates();
+
+            List<SemanticVersion> shuffled = new ArrayList<>(versions.reversed());
+            Collections.sort(shuffled);
+            assertThat(shuffled).containsExactlyElementsOf(versions);
+        }
+
+        @Test
+        void sorts_numbers_by_value_not_by_text() {
+            assertThat(v("1.9.0")).isLessThan(v("1.10.0"));
+            assertThat(v("1.9.9")).isLessThan(v("2.0.0"));
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "1.2.3, 1.2.4",
+            "1.2.9, 1.3.0",
+            "1.9.9, 2.0.0",
+            "0.9.9, 1.0.0-alpha",
+            "1.0.0-rc.1, 1.0.0",
+            "1.0.0-alpha, 1.0.0-alpha.0",
+            "1.0.0-1, 1.0.0-alpha",
+            "1.0.0-2, 1.0.0-10",
+            "1.0.0-9, 1.0.0-99999999999999999999",
+            "1.0.0-A, 1.0.0-a",
+            "2.0.0-rc.1, 2.0.0-rc.1.1",
+        })
+        void orders_the_lower_version_first(String lower, String higher) {
+            assertThat(v(lower)).isLessThan(v(higher));
+            assertThat(v(higher)).isGreaterThan(v(lower));
+        }
+
+        @Test
+        void precedence_comparator_is_one_shared_constant() {
+            assertThat(SemanticVersion.precedence()).isSameAs(SemanticVersion.precedence());
+        }
+
+        @Test
+        void precedence_sorts_the_same_way_when_there_is_no_build_metadata() {
+            List<SemanticVersion> versions = chain();
+            List<SemanticVersion> shuffled = new ArrayList<>(versions.reversed());
+
+            shuffled.sort(SemanticVersion.precedence());
+
+            assertThat(shuffled).containsExactlyElementsOf(versions);
+        }
+    }
+
+    @Nested
+    class BuildMetadata {
+
+        @Test
+        void precedence_ignores_build_metadata() {
+            assertThat(SemanticVersion.precedence().compare(v("1.0.0+a"), v("1.0.0+b"))).isZero();
+        }
+
+        @Test
+        void compare_to_breaks_the_tie_with_build_metadata() {
+            assertThat(v("1.0.0+a")).isLessThan(v("1.0.0+b"));
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "1.0.0, 1.0.0+build.1",
+            "1.0.0+a, 1.0.0+a.1",
+            "1.0.0+a.10, 1.0.0+a.9",
+            "1.0.0-rc.1+zzz, 1.0.0+aaa",
+        })
+        void orders_builds_after_precedence_as_plain_ascii(String lower, String higher) {
+            assertThat(v(lower)).isLessThan(v(higher));
+        }
+    }
+
+    @Nested
+    class ConsistentWithEquals {
+
+        @ParameterizedTest
+        @CsvSource({
+            "1.0.0, 1.0.0, true",
+            "1.0.0+a, 1.0.0+a, true",
+            "1.0.0+a, 1.0.0+b, false",
+            "1.0.0+a, 1.0.0, false",
+            "1.0.0-rc.1, 1.0.0-rc.1, true",
+            "1.0.0-rc.1, 1.0.0-rc.2, false",
+        })
+        void compare_to_is_zero_exactly_when_equals_is_true(String left, String right, boolean same) {
+            assertThat(v(left).compareTo(v(right)) == 0).isEqualTo(same);
+            assertThat(v(left).equals(v(right))).isEqualTo(same);
+        }
+
+        @Test
+        void a_natural_order_tree_set_keeps_both_builds() {
+            TreeSet<SemanticVersion> versions = new TreeSet<>();
+
+            versions.add(v("1.0.0+a"));
+            versions.add(v("1.0.0+b"));
+
+            assertThat(versions).hasSize(2);
+        }
+
+        @Test
+        void a_hash_set_keeps_both_builds() {
+            Set<SemanticVersion> versions = new HashSet<>(List.of(v("1.0.0+a"), v("1.0.0+b")));
+
+            assertThat(versions).hasSize(2);
+        }
+
+        @Test
+        void a_precedence_tree_set_treats_the_two_builds_as_one() {
+            TreeSet<SemanticVersion> versions = new TreeSet<>(SemanticVersion.precedence());
+
+            assertThat(versions.add(v("1.0.0+a"))).isTrue();
+            assertThat(versions.add(v("1.0.0+b"))).isFalse();
+
+            assertThat(versions).containsExactly(v("1.0.0+a"));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task26/NextVersionTest.java -->
+**[`NextVersionTest.java`](../src/test/java/io/github/chris013/practice/task26/NextVersionTest.java)**
+
+```java
+package io.github.chris013.practice.task26;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class NextVersionTest {
+
+    @Nested
+    class NextPatch {
+
+        @ParameterizedTest
+        @CsvSource({
+            "0.0.0, 0.0.1",
+            "1.2.3, 1.2.4",
+            "1.2.3+build.5, 1.2.4",
+            "1.2.3-rc.1, 1.2.3",
+            "1.2.3-rc.1+b, 1.2.3",
+        })
+        void drops_the_pre_release_or_bumps_the_patch(String from, String expected) {
+            assertThat(SemanticVersion.parse(from).nextPatch()).hasToString(expected);
+        }
+    }
+
+    @Nested
+    class NextMinor {
+
+        @ParameterizedTest
+        @CsvSource({
+            "1.0.0, 1.1.0",
+            "1.2.3, 1.3.0",
+            "1.2.3+b, 1.3.0",
+            "1.2.3-rc.1, 1.3.0",
+            "1.3.0-rc.1, 1.3.0",
+        })
+        void bumps_the_minor_or_drops_a_pre_release_on_a_zero_patch(String from, String expected) {
+            assertThat(SemanticVersion.parse(from).nextMinor()).hasToString(expected);
+        }
+    }
+
+    @Nested
+    class NextMajor {
+
+        @ParameterizedTest
+        @CsvSource({
+            "1.2.3, 2.0.0",
+            "1.2.3+b, 2.0.0",
+            "2.0.0-rc.1, 2.0.0",
+            "2.1.0-rc.1, 3.0.0",
+            "2.0.1-rc.1, 3.0.0",
+        })
+        void bumps_the_major_or_drops_a_pre_release_on_zero_minor_and_patch(String from, String expected) {
+            assertThat(SemanticVersion.parse(from).nextMajor()).hasToString(expected);
+        }
+    }
+
+    @Nested
+    class Overflow {
+
+        @Test
+        void refuses_to_wrap_around_past_the_largest_int() {
+            SemanticVersion largest = SemanticVersion.of(Integer.MAX_VALUE, 0, 0);
+
+            assertThatThrownBy(largest::nextMajor).isInstanceOf(ArithmeticException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task26/VersionRangeTest.java -->
+**[`VersionRangeTest.java`](../src/test/java/io/github/chris013/practice/task26/VersionRangeTest.java)**
+
+```java
+package io.github.chris013.practice.task26;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class VersionRangeTest {
+
+    private static boolean includes(String range, String version) {
+        return VersionRange.parse(range).includes(SemanticVersion.parse(version));
+    }
+
+    @Nested
+    class Caret {
+
+        @ParameterizedTest
+        @CsvSource({
+            "^1.2.3, 1.2.3, true",
+            "^1.2.3, 1.9.9, true",
+            "^1.2.3, 1.2.2, false",
+            "^1.2.3, 2.0.0, false",
+            "^0.2.3, 0.2.3, true",
+            "^0.2.3, 0.2.9, true",
+            "^0.2.3, 0.3.0, false",
+            "^0.2.3, 0.2.2, false",
+            "^0.0.3, 0.0.3, true",
+            "^0.0.3, 0.0.4, false",
+            "^0.0.3, 0.1.0, false",
+        })
+        void follows_the_npm_rules_for_major_minor_and_patch_zero(String range, String version, boolean expected) {
+            assertThat(includes(range, version)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class Tilde {
+
+        @ParameterizedTest
+        @CsvSource({
+            "~1.2.3, 1.2.3, true",
+            "~1.2.3, 1.2.9, true",
+            "~1.2.3, 1.3.0, false",
+            "~1.2.3, 1.2.2, false",
+            "~0.2.3, 0.2.9, true",
+            "~0.2.3, 0.3.0, false",
+        })
+        void allows_only_patch_changes(String range, String version, boolean expected) {
+            assertThat(includes(range, version)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class Exact {
+
+        @ParameterizedTest
+        @CsvSource({
+            "1.2.3, 1.2.3, true",
+            "1.2.3, 1.2.4, false",
+            "=1.2.3, 1.2.3, true",
+            "1.2.3, 1.2.3+build.5, true",
+            "1.2.3-rc.1, 1.2.3-rc.1, true",
+            "1.2.3-rc.1, 1.2.3-rc.2, false",
+        })
+        void matches_by_precedence_only(String range, String version, boolean expected) {
+            assertThat(includes(range, version)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class Star {
+
+        @ParameterizedTest
+        @CsvSource({
+            "*, 0.0.0, true",
+            "*, 0.1.0, true",
+            "*, 1.0.0, true",
+            "*, 1.0.0+build.9, true",
+            "*, 1.0.0-rc.1, false",
+        })
+        void includes_every_version_without_a_pre_release(String range, String version, boolean expected) {
+            assertThat(includes(range, version)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class ComparatorSets {
+
+        @ParameterizedTest
+        @CsvSource({
+            ">=1.2.0 <1.5.0, 1.2.0, true",
+            ">=1.2.0 <1.5.0, 1.4.9, true",
+            ">=1.2.0 <1.5.0, 1.5.0, false",
+            ">=1.2.0 <1.5.0, 1.1.9, false",
+            ">1.2.0 <=1.5.0, 1.2.0, false",
+            ">1.2.0 <=1.5.0, 1.5.0, true",
+            "<2.0.0, 1.9.9, true",
+            "<2.0.0, 2.0.0, false",
+        })
+        void every_comparator_must_hold(String range, String version, boolean expected) {
+            assertThat(includes(range, version)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class PreReleases {
+
+        @ParameterizedTest
+        @CsvSource({
+            "^1.2.3-beta.2, 1.2.3-beta.4, true",
+            "^1.2.3-beta.2, 1.2.3-beta.1, false",
+            "^1.2.3-beta.2, 1.2.4-beta.1, false",
+            "^1.2.3-beta.2, 1.2.3, true",
+            "^1.2.3-beta.2, 2.0.0-rc.1, false",
+            "^1.2.3, 1.3.0-rc.1, false",
+            "~1.2.3-beta.2, 1.2.3-beta.3, true",
+            "~1.2.3-beta.2, 1.2.4-beta.1, false",
+            ">=1.2.0-rc.1 <1.2.0, 1.2.0-rc.2, true",
+            ">=1.2.0 <1.5.0, 1.4.0-rc.1, false",
+        })
+        void a_pre_release_needs_a_comparator_with_the_same_major_minor_patch(
+                String range, String version, boolean expected) {
+            assertThat(includes(range, version)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class Parsing {
+
+        @Test
+        void to_string_returns_the_trimmed_original_text() {
+            assertThat(VersionRange.parse("  ^1.2.3 ")).hasToString("^1.2.3");
+            assertThat(VersionRange.parse(">=1.2.0 <1.5.0")).hasToString(">=1.2.0 <1.5.0");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "",
+            "   ",
+            "^",
+            "~",
+            "^1.2",
+            "^1.2.3 <2.0.0",
+            "~ 1.2.3",
+            ">=",
+            ">=1.2.0 1.5.0",
+            "1.2.3 <2.0.0",
+            ">=1.2.3 foo",
+            "x",
+            "*1.2.3",
+            "^2147483647.0.0",
+        })
+        void rejects_malformed_ranges_and_names_the_input(String text) {
+            assertThatThrownBy(() -> VersionRange.parse(text))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("invalid range '" + text.strip() + "'");
+        }
+
+        @Test
+        void rejects_null() {
+            assertThatThrownBy(() -> VersionRange.parse(null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -218,9 +794,489 @@ The test classes:
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task26/SemanticVersion.java -->
+**[`SemanticVersion.java`](../solutions/src/main/java/io/github/chris013/practice/task26/SemanticVersion.java)**
+
+```java
+package io.github.chris013.practice.task26;
+
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * A version number as defined by Semantic Versioning 2.0.0 (semver.org), for example {@code 2.0.0-rc.1+build.7}.
+ *
+ * <p>Why not keep versions as strings? {@code String.compareTo} puts {@code 1.10.0} before {@code 1.9.0}, and it
+ * ranks {@code 2.0.0-rc.1} above {@code 2.0.0}. Both mistakes reached our customers.
+ *
+ * <p>{@link #compareTo} is consistent with {@link #equals}: it returns zero only for identical versions, because it
+ * uses build metadata as the last tie-breaker. {@link #precedence()} ignores build metadata, so it is not consistent
+ * with equals. Read its Javadoc before you put it into a sorted set or map.
+ */
+public record SemanticVersion(int major, int minor, int patch, List<String> preRelease, List<String> build)
+        implements Comparable<SemanticVersion> {
+
+    /** SemVer section 11, without the build metadata tie-breaker. */
+    private static final Comparator<SemanticVersion> PRECEDENCE = Comparator.comparingInt(SemanticVersion::major)
+            .thenComparingInt(SemanticVersion::minor)
+            .thenComparingInt(SemanticVersion::patch)
+            .thenComparing(SemanticVersion::preRelease, SemanticVersion::comparePreRelease);
+
+    /** The natural order: precedence first, then build metadata. Consistent with equals. */
+    private static final Comparator<SemanticVersion> FULL_ORDER =
+            PRECEDENCE.thenComparing(SemanticVersion::build, SemanticVersion::compareBuild);
+
+    /**
+     * Validates the parts and copies the lists, so the record is immutable.
+     *
+     * @throws IllegalArgumentException if a number is negative or an identifier breaks the SemVer rules
+     * @throws NullPointerException if a component is null
+     */
+    public SemanticVersion {
+        requireNotNegative(major, "major");
+        requireNotNegative(minor, "minor");
+        requireNotNegative(patch, "patch");
+        preRelease = List.copyOf(Objects.requireNonNull(preRelease, "preRelease"));
+        build = List.copyOf(Objects.requireNonNull(build, "build"));
+        checkIdentifiers(preRelease, "pre-release", true);
+        checkIdentifiers(build, "build", false);
+    }
+
+    /** A stable version without pre-release or build metadata. */
+    public static SemanticVersion of(int major, int minor, int patch) {
+        return new SemanticVersion(major, minor, patch, List.of(), List.of());
+    }
+
+    /**
+     * Parses exactly the SemVer 2.0.0 grammar. Anything else is rejected, including a {@code v} prefix and whitespace.
+     *
+     * <p>The parser splits the text by its separators ({@code +} first, then the first {@code -}) and lets the
+     * constructor validate the identifiers. One regular expression would also work, but it could only say
+     * "invalid version", and the message is the part a user actually reads.
+     *
+     * @throws IllegalArgumentException if the text is not a valid version; the message names the input
+     */
+    public static SemanticVersion parse(String text) {
+        Objects.requireNonNull(text, "text");
+        try {
+            return parseOrThrow(text);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("invalid version '" + text + "': " + e.getMessage(), e);
+        }
+    }
+
+    private static SemanticVersion parseOrThrow(String text) {
+        if (text.isEmpty()) {
+            throw new IllegalArgumentException("version is empty");
+        }
+        String rest = text;
+        List<String> build = List.of();
+        int plus = rest.indexOf('+');
+        if (plus >= 0) {
+            build = splitIdentifiers(rest.substring(plus + 1));
+            rest = rest.substring(0, plus);
+        }
+        List<String> preRelease = List.of();
+        int dash = rest.indexOf('-');
+        if (dash >= 0) {
+            preRelease = splitIdentifiers(rest.substring(dash + 1));
+            rest = rest.substring(0, dash);
+        }
+        // The core never contains '-' or '+', so the first separator of each kind is the right one.
+        String[] core = rest.split("\\.", -1);
+        if (core.length != 3) {
+            throw new IllegalArgumentException("expected three numbers MAJOR.MINOR.PATCH, found " + core.length);
+        }
+        return new SemanticVersion(
+                parseNumber(core[0], "major"),
+                parseNumber(core[1], "minor"),
+                parseNumber(core[2], "patch"),
+                preRelease,
+                build);
+    }
+
+    /** Non-negative integers only: no sign, no leading zeros, and it must fit an {@code int}. */
+    private static int parseNumber(String digits, String part) {
+        if (digits.isEmpty()) {
+            throw new IllegalArgumentException("empty " + part);
+        }
+        for (char c : digits.toCharArray()) {
+            if (!isAsciiDigit(c)) {
+                throw new IllegalArgumentException("invalid character '" + c + "' in " + part);
+            }
+        }
+        if (digits.length() > 1 && digits.charAt(0) == '0') {
+            throw new IllegalArgumentException("leading zero in " + part);
+        }
+        try {
+            return Integer.parseInt(digits);
+        } catch (NumberFormatException e) {
+            // Without this, the caller would see a NumberFormatException, which is not the contract.
+            throw new IllegalArgumentException(part + " is too large", e);
+        }
+    }
+
+    private static List<String> splitIdentifiers(String dotted) {
+        return List.of(dotted.split("\\.", -1));
+    }
+
+    private static void checkIdentifiers(List<String> identifiers, String kind, boolean forbidLeadingZeros) {
+        for (String id : identifiers) {
+            if (id.isEmpty()) {
+                throw new IllegalArgumentException("empty " + kind + " identifier");
+            }
+            for (char c : id.toCharArray()) {
+                if (!isIdentifierChar(c)) {
+                    throw new IllegalArgumentException(
+                            "invalid character '" + c + "' in " + kind + " identifier '" + id + "'");
+                }
+            }
+            if (forbidLeadingZeros && allDigits(id) && id.length() > 1 && id.charAt(0) == '0') {
+                throw new IllegalArgumentException("leading zero in " + kind + " identifier '" + id + "'");
+            }
+        }
+    }
+
+    private static void requireNotNegative(int value, String name) {
+        if (value < 0) {
+            throw new IllegalArgumentException(name + " must not be negative, was " + value);
+        }
+    }
+
+    /**
+     * SemVer precedence: major, minor and patch numerically, then pre-release, and build metadata is ignored.
+     *
+     * <p><b>Warning:</b> two versions that differ only in build metadata compare as equal here, but are not
+     * {@link #equals}. Do not use this comparator in a {@code TreeSet} or as the key of a {@code TreeMap}: the set
+     * would silently drop one of them. It is safe for sorting for display, for {@code max}/{@code min}, and for
+     * range checks, where build metadata must not matter.
+     */
+    public static Comparator<SemanticVersion> precedence() {
+        return PRECEDENCE;
+    }
+
+    /**
+     * Compares precedence first and build metadata second, so that {@code compareTo} returns zero only for equal
+     * versions. That makes it safe in sorted collections.
+     */
+    @Override
+    public int compareTo(SemanticVersion other) {
+        return FULL_ORDER.compare(this, other);
+    }
+
+    /** A version with a pre-release (such as {@code 1.0.0-rc.1}) is lower than the same version without one. */
+    public boolean isPreRelease() {
+        return !preRelease.isEmpty();
+    }
+
+    /** Major version 1 or higher, and no pre-release. Major 0 means "initial development" in SemVer. */
+    public boolean isStable() {
+        return major >= 1 && !isPreRelease();
+    }
+
+    /**
+     * The next major release, following the npm rules. A pre-release such as {@code 2.0.0-rc.1} becomes
+     * {@code 2.0.0}, because that release is the one the pre-release was heading for.
+     *
+     * @throws ArithmeticException if the major number would not fit an {@code int}
+     */
+    public SemanticVersion nextMajor() {
+        if (isPreRelease() && minor == 0 && patch == 0) {
+            return of(major, 0, 0);
+        }
+        return of(Math.incrementExact(major), 0, 0);
+    }
+
+    /**
+     * The next minor release, following the npm rules. {@code 1.3.0-rc.1} becomes {@code 1.3.0}.
+     *
+     * @throws ArithmeticException if the minor number would not fit an {@code int}
+     */
+    public SemanticVersion nextMinor() {
+        if (isPreRelease() && patch == 0) {
+            return of(major, minor, 0);
+        }
+        return of(major, Math.incrementExact(minor), 0);
+    }
+
+    /**
+     * The next patch release, following the npm rules. {@code 1.2.3-rc.1} becomes {@code 1.2.3}.
+     *
+     * @throws ArithmeticException if the patch number would not fit an {@code int}
+     */
+    public SemanticVersion nextPatch() {
+        if (isPreRelease()) {
+            return of(major, minor, patch);
+        }
+        return of(major, minor, Math.incrementExact(patch));
+    }
+
+    /** The canonical text, for example {@code 1.0.0-rc.1+build.7}. {@code parse(v.toString())} gives back {@code v}. */
+    @Override
+    public String toString() {
+        StringBuilder text = new StringBuilder()
+                .append(major).append('.').append(minor).append('.').append(patch);
+        if (isPreRelease()) {
+            text.append('-').append(String.join(".", preRelease));
+        }
+        if (!build.isEmpty()) {
+            text.append('+').append(String.join(".", build));
+        }
+        return text.toString();
+    }
+
+    /** SemVer 11.4: an empty pre-release is the stable version, so it sorts higher. Lists are compared left to right. */
+    private static int comparePreRelease(List<String> left, List<String> right) {
+        if (left.isEmpty() || right.isEmpty()) {
+            return Boolean.compare(left.isEmpty(), right.isEmpty());
+        }
+        int common = Math.min(left.size(), right.size());
+        for (int i = 0; i < common; i++) {
+            int result = compareIdentifier(left.get(i), right.get(i));
+            if (result != 0) {
+                return result;
+            }
+        }
+        // All shared identifiers are equal, so the longer list has more fields and is higher.
+        return Integer.compare(left.size(), right.size());
+    }
+
+    private static int compareIdentifier(String left, String right) {
+        boolean leftNumeric = allDigits(left);
+        boolean rightNumeric = allDigits(right);
+        if (leftNumeric && rightNumeric) {
+            // No leading zeros, so a longer number is the bigger one. Comparing lengths first means we never
+            // parse the number, and there is no overflow however long the identifier is.
+            if (left.length() != right.length()) {
+                return Integer.compare(left.length(), right.length());
+            }
+            return left.compareTo(right);
+        }
+        if (leftNumeric != rightNumeric) {
+            // Numeric identifiers are lower than alphanumeric ones.
+            return leftNumeric ? -1 : 1;
+        }
+        return left.compareTo(right);
+    }
+
+    /**
+     * Build metadata is only a tie-breaker, so it has no meaning for ordering. We keep it simple: no build sorts
+     * lower than any build, then identifiers compare as plain ASCII strings. That means {@code a.10} sorts before
+     * {@code a.9}, which is correct by the rules and is documented in the task.
+     */
+    private static int compareBuild(List<String> left, List<String> right) {
+        int common = Math.min(left.size(), right.size());
+        for (int i = 0; i < common; i++) {
+            int result = left.get(i).compareTo(right.get(i));
+            if (result != 0) {
+                return result;
+            }
+        }
+        return Integer.compare(left.size(), right.size());
+    }
+
+    private static boolean allDigits(String text) {
+        if (text.isEmpty()) {
+            return false;
+        }
+        for (char c : text.toCharArray()) {
+            if (!isAsciiDigit(c)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isAsciiDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    private static boolean isIdentifierChar(char c) {
+        return isAsciiDigit(c) || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '-';
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task26/VersionRange.java -->
+**[`VersionRange.java`](../solutions/src/main/java/io/github/chris013/practice/task26/VersionRange.java)**
+
+```java
+package io.github.chris013.practice.task26;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * Which host versions a plugin supports, written in the npm style and simplified.
+ *
+ * <p>Accepted forms (exactly one of them):
+ * <ul>
+ *   <li>{@code *}: every version without a pre-release;</li>
+ *   <li>{@code 1.2.3}, or {@code =1.2.3}: exactly this version;</li>
+ *   <li>{@code ^1.2.3}: compatible with 1.2.3, so {@code >=1.2.3 <2.0.0}. For major 0 the upper bound moves to the
+ *       next minor ({@code ^0.2.3} is {@code <0.3.0}), and for {@code 0.0.x} to the next patch;</li>
+ *   <li>{@code ~1.2.3}: patch changes only, {@code >=1.2.3 <1.3.0};</li>
+ *   <li>one or more space-separated comparators, all of which must hold, for example {@code >=1.2.0 <1.5.0}.</li>
+ * </ul>
+ *
+ * <p>Pre-releases follow a simplified npm rule: a pre-release is included only when it satisfies the comparators and
+ * at least one comparator is itself a pre-release with the same major.minor.patch. So {@code ^1.2.3-beta.2} includes
+ * {@code 1.2.3-beta.4} but not {@code 1.2.4-beta.1}, and {@code ^1.2.3} and {@code *} never include a pre-release.
+ *
+ * <p>Comparisons use {@link SemanticVersion#precedence()}, so build metadata is ignored.
+ */
+public final class VersionRange {
+
+    private final String text;
+    private final List<Bound> bounds;
+
+    private VersionRange(String text, List<Bound> bounds) {
+        this.text = text;
+        this.bounds = bounds;
+    }
+
+    /**
+     * Parses a range. Surrounding whitespace is ignored.
+     *
+     * @throws IllegalArgumentException if the range is malformed; the message names the input
+     */
+    public static VersionRange parse(String text) {
+        Objects.requireNonNull(text, "text");
+        String trimmed = text.strip();
+        try {
+            return new VersionRange(trimmed, parseBounds(trimmed));
+        } catch (IllegalArgumentException | ArithmeticException e) {
+            // ArithmeticException comes from bumping a major such as 2147483647 in a caret range.
+            throw new IllegalArgumentException("invalid range '" + trimmed + "': " + e.getMessage(), e);
+        }
+    }
+
+    /** True when the version satisfies every comparator and the pre-release rule. */
+    public boolean includes(SemanticVersion version) {
+        Objects.requireNonNull(version, "version");
+        if (version.isPreRelease() && !allowsPreReleaseOf(version)) {
+            return false;
+        }
+        for (Bound bound : bounds) {
+            if (!bound.holds(version)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** The original text, trimmed. */
+    @Override
+    public String toString() {
+        return text;
+    }
+
+    private boolean allowsPreReleaseOf(SemanticVersion candidate) {
+        return bounds.stream()
+                .anyMatch(bound -> bound.version().isPreRelease() && sameCore(bound.version(), candidate));
+    }
+
+    private static boolean sameCore(SemanticVersion left, SemanticVersion right) {
+        return left.major() == right.major() && left.minor() == right.minor() && left.patch() == right.patch();
+    }
+
+    private static List<Bound> parseBounds(String text) {
+        if (text.isEmpty()) {
+            throw new IllegalArgumentException("range is empty");
+        }
+        if (text.equals("*")) {
+            return List.of();
+        }
+        if (text.charAt(0) == '^' || text.charAt(0) == '~') {
+            String version = text.substring(1);
+            if (version.chars().anyMatch(Character::isWhitespace)) {
+                throw new IllegalArgumentException("'" + text.charAt(0) + "' takes exactly one version");
+            }
+            SemanticVersion base = SemanticVersion.parse(version);
+            return text.charAt(0) == '^' ? caretBounds(base) : tildeBounds(base);
+        }
+        String[] tokens = text.split("\\s+");
+        if (tokens.length == 1) {
+            return List.of(parseComparator(tokens[0], false));
+        }
+        List<Bound> bounds = new ArrayList<>();
+        for (String token : tokens) {
+            bounds.add(parseComparator(token, true));
+        }
+        return List.copyOf(bounds);
+    }
+
+    /** {@code ^1.2.3} is {@code >=1.2.3 <2.0.0}. For major 0 the first non-zero part is the one that may not change. */
+    private static List<Bound> caretBounds(SemanticVersion base) {
+        SemanticVersion upper;
+        if (base.major() > 0) {
+            upper = SemanticVersion.of(Math.incrementExact(base.major()), 0, 0);
+        } else if (base.minor() > 0) {
+            upper = SemanticVersion.of(0, Math.incrementExact(base.minor()), 0);
+        } else {
+            upper = SemanticVersion.of(0, 0, Math.incrementExact(base.patch()));
+        }
+        return List.of(new Bound(Operator.GREATER_OR_EQUAL, base), new Bound(Operator.LESS, upper));
+    }
+
+    /** {@code ~1.2.3} is {@code >=1.2.3 <1.3.0}. */
+    private static List<Bound> tildeBounds(SemanticVersion base) {
+        SemanticVersion upper = SemanticVersion.of(base.major(), Math.incrementExact(base.minor()), 0);
+        return List.of(new Bound(Operator.GREATER_OR_EQUAL, base), new Bound(Operator.LESS, upper));
+    }
+
+    /**
+     * A comparator is an operator followed by a version, for example {@code >=1.2.0}. The operator may be left out
+     * only when the range is a single version, which means exact match.
+     */
+    private static Bound parseComparator(String token, boolean operatorRequired) {
+        for (Operator operator : Operator.values()) {
+            // Declared with ">=" and "<=" before ">" and "<", so the longer symbol wins.
+            if (token.startsWith(operator.symbol)) {
+                return new Bound(operator, SemanticVersion.parse(token.substring(operator.symbol.length())));
+            }
+        }
+        if (operatorRequired) {
+            throw new IllegalArgumentException(
+                    "comparator '" + token + "' needs an operator (>=, >, <=, <, =)");
+        }
+        return new Bound(Operator.EQUAL, SemanticVersion.parse(token));
+    }
+
+    private enum Operator {
+        GREATER_OR_EQUAL(">="),
+        LESS_OR_EQUAL("<="),
+        GREATER(">"),
+        LESS("<"),
+        EQUAL("=");
+
+        private final String symbol;
+
+        Operator(String symbol) {
+            this.symbol = symbol;
+        }
+
+        boolean accepts(int comparison) {
+            return switch (this) {
+                case GREATER_OR_EQUAL -> comparison >= 0;
+                case LESS_OR_EQUAL -> comparison <= 0;
+                case GREATER -> comparison > 0;
+                case LESS -> comparison < 0;
+                case EQUAL -> comparison == 0;
+            };
+        }
+    }
+
+    private record Bound(Operator operator, SemanticVersion version) {
+
+        boolean holds(SemanticVersion candidate) {
+            return operator.accepts(SemanticVersion.precedence().compare(candidate, version));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

@@ -49,6 +49,11 @@ Some tasks have a different shape, and their text says so: refactoring tasks sta
 | 23 | [A travel quote aggregator with deadlines](tasks/23-quote-aggregator.md) | 🔴 Hard | Virtual threads, `invokeAll` with a budget, cancellation, interruption |
 | 24 | [Breaking up a god class](tasks/24-god-class-breakup.md) | 🔴 Hard | Large refactoring, Split Phase, Extract Class, legacy facade |
 | 25 | [Capstone: subscription billing](tasks/25-capstone-subscription-billing.md) | ⚫ Expert | DDD + hexagonal, proration, idempotent batch jobs, dunning |
+| 26 | [Semantic versions and the compareTo contract](tasks/26-semantic-version.md) | 🟢 Easy | Parsing to a spec, `Comparable` consistent with `equals`, comparator composition, version ranges |
+| 27 | [Importing a supplier price list](tasks/27-csv-import-report.md) | 🟡 Medium | Streaming I/O, try-with-resources, collecting all errors, a small parser, batching |
+| 28 | [Write your own Collectors](tasks/28-custom-collectors.md) | 🟡 Medium | The `Collector` interface, parallel-safe combiners, Welford's algorithm, PECS |
+| 29 | [An event-sourced bank account](tasks/29-event-sourced-account.md) | 🔴 Hard | Event sourcing, optimistic concurrency with retry, projections |
+| 30 | [A tiny JSON writer](tasks/30-json-writer.md) | 🟡 Medium | Sealed value model, RFC 8259 escaping, reflection on records, annotations, cycle detection |
 
 🟢 Easy · 🟡 Medium · 🔴 Hard · ⚫ Expert. The order mixes topics and difficulties on purpose, but every task stands on its own.
 

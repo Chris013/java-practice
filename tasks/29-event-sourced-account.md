@@ -206,15 +206,813 @@ Run: `mvn test -Dtest='**/task29/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task29/AccountTest.java -->
+**[`AccountTest.java`](../src/test/java/io/github/chris013/practice/task29/AccountTest.java)**
+
+```java
+package io.github.chris013.practice.task29;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.chris013.practice.task29.domain.Account;
+import io.github.chris013.practice.task29.domain.AccountClosed;
+import io.github.chris013.practice.task29.domain.AccountClosedException;
+import io.github.chris013.practice.task29.domain.AccountEvent;
+import io.github.chris013.practice.task29.domain.AccountId;
+import io.github.chris013.practice.task29.domain.AccountOpened;
+import io.github.chris013.practice.task29.domain.InsufficientFundsException;
+import io.github.chris013.practice.task29.domain.Money;
+import io.github.chris013.practice.task29.domain.MoneyDeposited;
+import io.github.chris013.practice.task29.domain.MoneyWithdrawn;
+import io.github.chris013.practice.task29.domain.OverdraftLimitChanged;
+import java.time.Instant;
+import java.util.List;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class AccountTest {
+
+    private static final AccountId ID = new AccountId("acc-1");
+    private static final AccountId OTHER_ID = new AccountId("acc-2");
+    private static final Instant T0 = Instant.parse("2026-03-01T09:00:00Z");
+    private static final Instant T1 = Instant.parse("2026-03-02T09:00:00Z");
+    private static final Instant T2 = Instant.parse("2026-03-03T09:00:00Z");
+    private static final Money LIMIT_500 = Money.euros("500.00");
+
+    /** An account that has been opened and whose opening is already committed, like one loaded from a store. */
+    private static Account committedAccount(Money limit) {
+        Account account = Account.open(ID, "Anna", limit, T0);
+        account.markCommitted();
+        return account;
+    }
+
+    @Nested
+    class Opening {
+
+        @Test
+        void starts_with_a_zero_balance_and_the_given_limit() {
+            Account account = Account.open(ID, "Anna", LIMIT_500, T0);
+
+            assertThat(account.id()).isEqualTo(ID);
+            assertThat(account.owner()).isEqualTo("Anna");
+            assertThat(account.balance()).isEqualTo(Money.zero());
+            assertThat(account.overdraftLimit()).isEqualTo(LIMIT_500);
+            assertThat(account.isClosed()).isFalse();
+        }
+
+        @Test
+        void records_one_opened_event() {
+            Account account = Account.open(ID, "Anna", LIMIT_500, T0);
+
+            assertThat(account.uncommittedEvents()).containsExactly(new AccountOpened(ID, T0, "Anna", LIMIT_500));
+            assertThat(account.version()).isEqualTo(1);
+        }
+
+        @Test
+        void rejects_a_blank_owner() {
+            assertThatThrownBy(() -> Account.open(ID, " ", LIMIT_500, T0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_negative_overdraft_limit_but_accepts_zero() {
+            assertThatThrownBy(() -> Account.open(ID, "Anna", Money.euros("-0.01"), T0))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(Account.open(ID, "Anna", Money.zero(), T0).overdraftLimit()).isEqualTo(Money.zero());
+        }
+    }
+
+    @Nested
+    class Deposits {
+
+        @Test
+        void increases_the_balance_and_records_the_event() {
+            Account account = committedAccount(LIMIT_500);
+
+            account.deposit(Money.euros("100.00"), T1);
+
+            assertThat(account.balance()).isEqualTo(Money.euros("100.00"));
+            assertThat(account.uncommittedEvents())
+                    .containsExactly(new MoneyDeposited(ID, T1, Money.euros("100.00")));
+            assertThat(account.version()).isEqualTo(2);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0.00", "-1.00", "-0.01"})
+        void rejects_an_amount_that_is_not_positive_and_records_nothing(String amount) {
+            Account account = committedAccount(LIMIT_500);
+
+            assertThatThrownBy(() -> account.deposit(Money.euros(amount), T1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(account.uncommittedEvents()).isEmpty();
+            assertThat(account.version()).isEqualTo(1);
+        }
+    }
+
+    @Nested
+    class Withdrawals {
+
+        @Test
+        void reduces_the_balance_within_what_is_there() {
+            Account account = committedAccount(LIMIT_500);
+            account.deposit(Money.euros("100.00"), T1);
+
+            account.withdraw(Money.euros("40.00"), T2);
+
+            assertThat(account.balance()).isEqualTo(Money.euros("60.00"));
+        }
+
+        @Test
+        void allows_the_balance_to_reach_exactly_minus_the_limit() {
+            Account account = committedAccount(LIMIT_500);
+
+            account.withdraw(Money.euros("500.00"), T1);
+
+            assertThat(account.balance()).isEqualTo(Money.euros("-500.00"));
+            assertThat(account.balance().isNegative()).isTrue();
+        }
+
+        @Test
+        void refuses_one_cent_beyond_the_overdraft_limit() {
+            Account account = committedAccount(LIMIT_500);
+
+            assertThatThrownBy(() -> account.withdraw(Money.euros("500.01"), T1))
+                    .isInstanceOf(InsufficientFundsException.class)
+                    .hasMessageContaining("500.01 EUR")
+                    .hasMessageContaining("500.00 EUR");
+            assertThat(account.balance()).isEqualTo(Money.zero());
+        }
+
+        @Test
+        void counts_the_money_already_in_the_account_as_available() {
+            Account account = committedAccount(LIMIT_500);
+            account.deposit(Money.euros("100.00"), T1);
+            account.markCommitted();
+
+            assertThatThrownBy(() -> account.withdraw(Money.euros("601.00"), T2))
+                    .isInstanceOf(InsufficientFundsException.class)
+                    .hasMessageContaining("600.00 EUR");
+            account.withdraw(Money.euros("600.00"), T2);
+            assertThat(account.balance()).isEqualTo(Money.euros("-500.00"));
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0.00", "-5.00"})
+        void rejects_an_amount_that_is_not_positive(String amount) {
+            Account account = committedAccount(LIMIT_500);
+
+            assertThatThrownBy(() -> account.withdraw(Money.euros(amount), T1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(account.uncommittedEvents()).isEmpty();
+        }
+
+        @Test
+        void a_refused_withdrawal_records_nothing() {
+            Account account = committedAccount(Money.zero());
+
+            assertThatThrownBy(() -> account.withdraw(Money.euros("0.01"), T1))
+                    .isInstanceOf(InsufficientFundsException.class);
+            assertThat(account.uncommittedEvents()).isEmpty();
+            assertThat(account.version()).isEqualTo(1);
+        }
+    }
+
+    @Nested
+    class ChangingTheOverdraftLimit {
+
+        @Test
+        void sets_the_new_limit_and_records_the_event() {
+            Account account = committedAccount(LIMIT_500);
+
+            account.changeOverdraftLimit(Money.euros("800.00"), T1);
+
+            assertThat(account.overdraftLimit()).isEqualTo(Money.euros("800.00"));
+            assertThat(account.uncommittedEvents())
+                    .containsExactly(new OverdraftLimitChanged(ID, T1, Money.euros("800.00")));
+        }
+
+        @Test
+        void allows_a_limit_of_exactly_the_current_debt() {
+            Account account = committedAccount(LIMIT_500);
+            account.withdraw(Money.euros("300.00"), T1);
+
+            account.changeOverdraftLimit(Money.euros("300.00"), T2);
+
+            assertThat(account.overdraftLimit()).isEqualTo(Money.euros("300.00"));
+        }
+
+        @Test
+        void refuses_a_limit_one_cent_below_the_current_debt() {
+            Account account = committedAccount(LIMIT_500);
+            account.withdraw(Money.euros("300.00"), T1);
+            account.markCommitted();
+
+            assertThatThrownBy(() -> account.changeOverdraftLimit(Money.euros("299.99"), T2))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThat(account.overdraftLimit()).isEqualTo(LIMIT_500);
+            assertThat(account.uncommittedEvents()).isEmpty();
+        }
+
+        @Test
+        void rejects_a_negative_limit() {
+            Account account = committedAccount(LIMIT_500);
+
+            assertThatThrownBy(() -> account.changeOverdraftLimit(Money.euros("-1.00"), T1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(account.uncommittedEvents()).isEmpty();
+        }
+    }
+
+    @Nested
+    class Closing {
+
+        @Test
+        void closes_an_account_with_a_zero_balance() {
+            Account account = committedAccount(LIMIT_500);
+
+            account.close(T1);
+
+            assertThat(account.isClosed()).isTrue();
+            assertThat(account.uncommittedEvents()).containsExactly(new AccountClosed(ID, T1));
+        }
+
+        @Test
+        void refuses_to_close_while_money_is_in_the_account() {
+            Account account = committedAccount(LIMIT_500);
+            account.deposit(Money.euros("0.01"), T1);
+
+            assertThatThrownBy(() -> account.close(T2)).isInstanceOf(IllegalStateException.class);
+            assertThat(account.isClosed()).isFalse();
+        }
+
+        @Test
+        void refuses_to_close_while_the_account_is_overdrawn() {
+            Account account = committedAccount(LIMIT_500);
+            account.withdraw(Money.euros("50.00"), T1);
+
+            assertThatThrownBy(() -> account.close(T2)).isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        void closing_twice_is_refused_as_a_closed_account() {
+            Account account = committedAccount(LIMIT_500);
+            account.close(T1);
+
+            assertThatThrownBy(() -> account.close(T2)).isInstanceOf(AccountClosedException.class);
+        }
+    }
+
+    @Nested
+    class ClosedAccounts {
+
+        @Test
+        void reject_every_command() {
+            Account account = committedAccount(LIMIT_500);
+            account.close(T1);
+            account.markCommitted();
+
+            assertThatThrownBy(() -> account.deposit(Money.euros("1.00"), T2))
+                    .isInstanceOf(AccountClosedException.class);
+            assertThatThrownBy(() -> account.withdraw(Money.euros("1.00"), T2))
+                    .isInstanceOf(AccountClosedException.class);
+            assertThatThrownBy(() -> account.changeOverdraftLimit(Money.euros("10.00"), T2))
+                    .isInstanceOf(AccountClosedException.class);
+            assertThat(account.uncommittedEvents()).isEmpty();
+            assertThat(account.version()).isEqualTo(2);
+        }
+
+        @Test
+        void checks_the_arguments_before_the_closed_state() {
+            Account account = committedAccount(LIMIT_500);
+            account.close(T1);
+
+            assertThatThrownBy(() -> account.deposit(Money.zero(), T2)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Replay {
+
+        private final List<AccountEvent> history = List.of(
+                new AccountOpened(ID, T0, "Anna", LIMIT_500),
+                new MoneyDeposited(ID, T1, Money.euros("200.00")),
+                new MoneyWithdrawn(ID, T2, Money.euros("350.00")),
+                new OverdraftLimitChanged(ID, T2, Money.euros("800.00")));
+
+        @Test
+        void reproduces_the_balance_limit_and_version() {
+            Account account = Account.replay(history);
+
+            assertThat(account.id()).isEqualTo(ID);
+            assertThat(account.owner()).isEqualTo("Anna");
+            assertThat(account.balance()).isEqualTo(Money.euros("-150.00"));
+            assertThat(account.overdraftLimit()).isEqualTo(Money.euros("800.00"));
+            assertThat(account.version()).isEqualTo(4);
+        }
+
+        @Test
+        void leaves_no_uncommitted_events() {
+            Account account = Account.replay(history);
+
+            assertThat(account.uncommittedEvents()).isEmpty();
+        }
+
+        @Test
+        void applies_an_old_withdrawal_that_today_would_refuse() {
+            // Opened in 2026 with a limit of 500.00. A limit capped at 300.00 from 2027 would refuse this,
+            // replay must not.
+            List<AccountEvent> oldHistory = List.of(
+                    new AccountOpened(ID, T0, "Anna", LIMIT_500),
+                    new MoneyWithdrawn(ID, T1, Money.euros("450.00")));
+
+            assertThat(Account.replay(oldHistory).balance()).isEqualTo(Money.euros("-450.00"));
+        }
+
+        @Test
+        void restores_a_closed_account() {
+            List<AccountEvent> closedHistory = List.of(
+                    new AccountOpened(ID, T0, "Anna", LIMIT_500),
+                    new AccountClosed(ID, T1));
+
+            assertThat(Account.replay(closedHistory).isClosed()).isTrue();
+        }
+
+        @Test
+        void rejects_an_empty_history() {
+            assertThatThrownBy(() -> Account.replay(List.of())).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_history_that_does_not_start_with_the_opening() {
+            assertThatThrownBy(() -> Account.replay(List.of(new MoneyDeposited(ID, T1, Money.euros("1.00")))))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_events_of_another_account() {
+            List<AccountEvent> mixed = List.of(
+                    new AccountOpened(ID, T0, "Anna", LIMIT_500),
+                    new MoneyDeposited(OTHER_ID, T1, Money.euros("1.00")));
+
+            assertThatThrownBy(() -> Account.replay(mixed)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_second_opening() {
+            List<AccountEvent> twice = List.of(
+                    new AccountOpened(ID, T0, "Anna", LIMIT_500),
+                    new AccountOpened(ID, T1, "Anna", Money.zero()));
+
+            assertThatThrownBy(() -> Account.replay(twice)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Events {
+
+        @Test
+        void every_event_carries_the_instant_the_command_was_given() {
+            Account account = Account.open(ID, "Anna", LIMIT_500, T0);
+            account.deposit(Money.euros("10.00"), T1);
+
+            assertThat(account.uncommittedEvents()).extracting(AccountEvent::occurredAt).containsExactly(T0, T1);
+        }
+
+        @Test
+        void mark_committed_clears_the_uncommitted_events_but_keeps_the_version() {
+            Account account = Account.open(ID, "Anna", LIMIT_500, T0);
+
+            account.markCommitted();
+
+            assertThat(account.uncommittedEvents()).isEmpty();
+            assertThat(account.version()).isEqualTo(1);
+        }
+
+        @Test
+        void uncommitted_events_cannot_be_changed_from_outside() {
+            Account account = Account.open(ID, "Anna", LIMIT_500, T0);
+
+            assertThatThrownBy(() -> account.uncommittedEvents().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task29/InMemoryEventStoreTest.java -->
+**[`InMemoryEventStoreTest.java`](../src/test/java/io/github/chris013/practice/task29/InMemoryEventStoreTest.java)**
+
+```java
+package io.github.chris013.practice.task29;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.chris013.practice.task29.adapter.inmemory.InMemoryEventStore;
+import io.github.chris013.practice.task29.application.ConcurrencyException;
+import io.github.chris013.practice.task29.domain.AccountEvent;
+import io.github.chris013.practice.task29.domain.AccountId;
+import io.github.chris013.practice.task29.domain.AccountOpened;
+import io.github.chris013.practice.task29.domain.Money;
+import io.github.chris013.practice.task29.domain.MoneyDeposited;
+import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class InMemoryEventStoreTest {
+
+    private static final AccountId ID = new AccountId("acc-1");
+    private static final Instant T0 = Instant.parse("2026-03-01T09:00:00Z");
+    private static final AccountOpened OPENED = new AccountOpened(ID, T0, "Anna", Money.zero());
+    private static final MoneyDeposited DEPOSIT = new MoneyDeposited(ID, T0, Money.euros("10.00"));
+
+    @Nested
+    class AppendAndLoad {
+
+        private final InMemoryEventStore store = new InMemoryEventStore();
+
+        @Test
+        void loads_what_was_appended_in_order() {
+            store.append(ID, 0, List.of(OPENED));
+            store.append(ID, 1, List.of(DEPOSIT));
+
+            assertThat(store.load(ID)).containsExactly(OPENED, DEPOSIT);
+        }
+
+        @Test
+        void an_unknown_stream_loads_as_empty() {
+            assertThat(store.load(new AccountId("nobody"))).isEmpty();
+        }
+
+        @Test
+        void a_new_stream_must_be_appended_at_version_zero() {
+            assertThatThrownBy(() -> store.append(ID, 1, List.of(OPENED)))
+                    .isInstanceOf(ConcurrencyException.class);
+            assertThat(store.load(ID)).isEmpty();
+        }
+
+        @Test
+        void a_wrong_expected_version_is_refused_and_writes_nothing() {
+            store.append(ID, 0, List.of(OPENED));
+
+            assertThatThrownBy(() -> store.append(ID, 0, List.of(DEPOSIT)))
+                    .isInstanceOf(ConcurrencyException.class)
+                    .hasMessageContaining("expected version 0")
+                    .hasMessageContaining("at 1");
+            assertThat(store.load(ID)).containsExactly(OPENED);
+        }
+
+        @Test
+        void the_returned_history_cannot_be_changed() {
+            store.append(ID, 0, List.of(OPENED));
+
+            assertThatThrownBy(() -> store.load(ID).add(DEPOSIT)).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void streams_are_independent() {
+            AccountId other = new AccountId("acc-2");
+            store.append(ID, 0, List.of(OPENED));
+            store.append(other, 0, List.of(new AccountOpened(other, T0, "Ben", Money.zero())));
+
+            assertThat(store.load(ID)).hasSize(1);
+            assertThat(store.load(other)).hasSize(1);
+        }
+    }
+
+    @Nested
+    class Concurrency {
+
+        @Test
+        void of_many_writers_with_the_same_expected_version_exactly_one_succeeds() throws InterruptedException {
+            InMemoryEventStore store = new InMemoryEventStore();
+            store.append(ID, 0, List.of(OPENED));
+            int writers = 100;
+            AtomicInteger succeeded = new AtomicInteger();
+            AtomicInteger refused = new AtomicInteger();
+            CountDownLatch startTogether = new CountDownLatch(1);
+
+            try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (int i = 0; i < writers; i++) {
+                    pool.submit(() -> {
+                        startTogether.await();
+                        try {
+                            store.append(ID, 1, List.of(DEPOSIT));
+                            succeeded.incrementAndGet();
+                        } catch (ConcurrencyException expected) {
+                            refused.incrementAndGet();
+                        }
+                        return null;
+                    });
+                }
+                startTogether.countDown();
+            }
+
+            assertThat(succeeded.get()).isEqualTo(1);
+            assertThat(refused.get()).isEqualTo(writers - 1);
+            List<AccountEvent> history = store.load(ID);
+            assertThat(history).hasSize(2);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task29/AccountServiceTest.java -->
+**[`AccountServiceTest.java`](../src/test/java/io/github/chris013/practice/task29/AccountServiceTest.java)**
+
+```java
+package io.github.chris013.practice.task29;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.chris013.practice.task29.adapter.inmemory.InMemoryEventStore;
+import io.github.chris013.practice.task29.application.AccountService;
+import io.github.chris013.practice.task29.application.ConcurrencyException;
+import io.github.chris013.practice.task29.application.EventStore;
+import io.github.chris013.practice.task29.domain.AccountClosedException;
+import io.github.chris013.practice.task29.domain.AccountEvent;
+import io.github.chris013.practice.task29.domain.AccountId;
+import io.github.chris013.practice.task29.domain.AccountOpened;
+import io.github.chris013.practice.task29.domain.InsufficientFundsException;
+import io.github.chris013.practice.task29.domain.Money;
+import io.github.chris013.practice.task29.domain.MoneyDeposited;
+import io.github.chris013.practice.task29.domain.MoneyWithdrawn;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.function.Consumer;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class AccountServiceTest {
+
+    private static final AccountId ID = new AccountId("acc-1");
+    private static final Instant T0 = Instant.parse("2026-03-01T09:00:00Z");
+
+    private final MutableClock clock = new MutableClock(T0);
+    private final InMemoryEventStore store = new InMemoryEventStore();
+    private final AccountService service = new AccountService(store, clock, () -> ID);
+
+    /** Adds an event to the stream behind the back of the service, as a second writer would. */
+    private static void writeConcurrently(EventStore store, AccountEvent event) {
+        store.append(event.accountId(), store.load(event.accountId()).size(), List.of(event));
+    }
+
+    /**
+     * Lets another writer sneak in before the first {@code races} appends, then forwards the append. This is the
+     * lost-update scenario in code: the service decided on a state that another writer has already changed.
+     */
+    private static final class RacingEventStore implements EventStore {
+
+        private final EventStore delegate;
+        private final Consumer<EventStore> otherWriter;
+        private int racesLeft;
+        private int appendCalls;
+        private int loadCalls;
+
+        RacingEventStore(EventStore delegate, int races, Consumer<EventStore> otherWriter) {
+            this.delegate = delegate;
+            this.racesLeft = races;
+            this.otherWriter = otherWriter;
+        }
+
+        @Override
+        public List<AccountEvent> load(AccountId id) {
+            loadCalls++;
+            return delegate.load(id);
+        }
+
+        @Override
+        public void append(AccountId id, long expectedVersion, List<AccountEvent> events) {
+            appendCalls++;
+            if (racesLeft > 0) {
+                racesLeft--;
+                otherWriter.accept(delegate);
+            }
+            delegate.append(id, expectedVersion, events);
+        }
+
+        int appendCalls() {
+            return appendCalls;
+        }
+
+        int loadCalls() {
+            return loadCalls;
+        }
+    }
+
+    @Nested
+    class HappyPath {
+
+        @Test
+        void open_stores_the_opening_event_and_returns_the_id() {
+            AccountId opened = service.open("Anna", Money.euros("500.00"));
+
+            assertThat(opened).isEqualTo(ID);
+            assertThat(store.load(ID))
+                    .containsExactly(new AccountOpened(ID, T0, "Anna", Money.euros("500.00")));
+        }
+
+        @Test
+        void each_command_is_replayed_from_the_store_and_persisted() {
+            service.open("Anna", Money.euros("500.00"));
+            service.deposit(ID, Money.euros("100.00"));
+            service.withdraw(ID, Money.euros("40.00"));
+
+            assertThat(service.balanceOf(ID)).isEqualTo(Money.euros("60.00"));
+            assertThat(store.load(ID)).hasSize(3);
+        }
+
+        @Test
+        void events_carry_the_time_of_the_command() {
+            service.open("Anna", Money.euros("500.00"));
+            clock.advanceBy(Duration.ofHours(1));
+
+            service.deposit(ID, Money.euros("10.00"));
+
+            assertThat(store.load(ID).getLast())
+                    .isEqualTo(new MoneyDeposited(ID, T0.plus(Duration.ofHours(1)), Money.euros("10.00")));
+        }
+
+        @Test
+        void limit_changes_and_closing_go_through_the_store() {
+            service.open("Anna", Money.euros("500.00"));
+
+            service.changeOverdraftLimit(ID, Money.euros("800.00"));
+            service.close(ID);
+
+            assertThat(service.balanceOf(ID)).isEqualTo(Money.zero());
+            assertThat(store.load(ID)).hasSize(3);
+            assertThatThrownBy(() -> service.deposit(ID, Money.euros("1.00")))
+                    .isInstanceOf(AccountClosedException.class);
+        }
+    }
+
+    @Nested
+    class UnknownAccount {
+
+        @Test
+        void a_command_on_an_unknown_account_is_rejected() {
+            assertThatThrownBy(() -> service.deposit(ID, Money.euros("1.00")))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("unknown account acc-1");
+        }
+
+        @Test
+        void asking_the_balance_of_an_unknown_account_is_rejected() {
+            assertThatThrownBy(() -> service.balanceOf(ID)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class OptimisticConcurrency {
+
+        @Test
+        void retries_after_a_concurrent_deposit_and_keeps_both_writes() {
+            service.open("Anna", Money.euros("500.00"));
+            service.deposit(ID, Money.euros("100.00"));
+            RacingEventStore racing = new RacingEventStore(store, 1,
+                    writer -> writeConcurrently(writer, new MoneyDeposited(ID, T0, Money.euros("50.00"))));
+            AccountService racingService = new AccountService(racing, clock, () -> ID);
+
+            racingService.withdraw(ID, Money.euros("80.00"));
+
+            assertThat(service.balanceOf(ID)).isEqualTo(Money.euros("70.00"));
+            assertThat(racing.appendCalls()).isEqualTo(2);
+            assertThat(store.load(ID)).hasSize(4);
+        }
+
+        @Test
+        void revalidates_a_withdrawal_that_was_fine_on_the_stale_balance() {
+            // Balance 100.00, limit 500.00. Both writers see 100.00 and withdraw 500.00 (-400.00, fine).
+            // The other one lands first, so the retry sees -400.00, and -400.00 - 500.00 = -900.00 is past
+            // -500.00: refused.
+            service.open("Anna", Money.euros("500.00"));
+            service.deposit(ID, Money.euros("100.00"));
+            RacingEventStore racing = new RacingEventStore(store, 1,
+                    writer -> writeConcurrently(writer, new MoneyWithdrawn(ID, T0, Money.euros("500.00"))));
+            AccountService racingService = new AccountService(racing, clock, () -> ID);
+
+            assertThatThrownBy(() -> racingService.withdraw(ID, Money.euros("500.00")))
+                    .isInstanceOf(InsufficientFundsException.class);
+
+            assertThat(service.balanceOf(ID)).isEqualTo(Money.euros("-400.00"));
+            assertThat(racing.appendCalls()).isEqualTo(1);
+            assertThat(racing.loadCalls()).isEqualTo(2);
+            assertThat(store.load(ID)).hasSize(3);
+        }
+
+        @Test
+        void gives_up_after_three_attempts_and_rethrows_the_conflict() {
+            service.open("Anna", Money.euros("500.00"));
+            RacingEventStore racing = new RacingEventStore(store, Integer.MAX_VALUE,
+                    writer -> writeConcurrently(writer, new MoneyDeposited(ID, T0, Money.euros("1.00"))));
+            AccountService racingService = new AccountService(racing, clock, () -> ID);
+
+            assertThatThrownBy(() -> racingService.deposit(ID, Money.euros("10.00")))
+                    .isInstanceOf(ConcurrencyException.class);
+
+            assertThat(racing.appendCalls()).isEqualTo(3);
+            assertThat(store.load(ID)).hasSize(4);
+        }
+
+        @Test
+        void a_business_failure_is_never_retried() {
+            service.open("Anna", Money.zero());
+            RacingEventStore racing = new RacingEventStore(store, Integer.MAX_VALUE,
+                    writer -> writeConcurrently(writer, new MoneyDeposited(ID, T0, Money.euros("1.00"))));
+            AccountService racingService = new AccountService(racing, clock, () -> ID);
+
+            assertThatThrownBy(() -> racingService.withdraw(ID, Money.euros("5.00")))
+                    .isInstanceOf(InsufficientFundsException.class);
+
+            assertThat(racing.loadCalls()).isEqualTo(1);
+            assertThat(racing.appendCalls()).isZero();
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task29/AccountStatementTest.java -->
+**[`AccountStatementTest.java`](../src/test/java/io/github/chris013/practice/task29/AccountStatementTest.java)**
+
+```java
+package io.github.chris013.practice.task29;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.github.chris013.practice.task29.domain.AccountClosed;
+import io.github.chris013.practice.task29.domain.AccountEvent;
+import io.github.chris013.practice.task29.domain.AccountId;
+import io.github.chris013.practice.task29.domain.AccountOpened;
+import io.github.chris013.practice.task29.domain.Money;
+import io.github.chris013.practice.task29.domain.MoneyDeposited;
+import io.github.chris013.practice.task29.domain.MoneyWithdrawn;
+import io.github.chris013.practice.task29.domain.OverdraftLimitChanged;
+import io.github.chris013.practice.task29.projection.AccountStatement;
+import io.github.chris013.practice.task29.projection.StatementLine;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+class AccountStatementTest {
+
+    private static final AccountId ID = new AccountId("acc-1");
+
+    @Test
+    void turns_a_scripted_history_into_exact_statement_lines() {
+        List<AccountEvent> history = List.of(
+                new AccountOpened(ID, Instant.parse("2026-03-01T09:00:00Z"), "Anna", Money.euros("500.00")),
+                new MoneyDeposited(ID, Instant.parse("2026-03-02T10:00:00Z"), Money.euros("200.00")),
+                new MoneyWithdrawn(ID, Instant.parse("2026-03-03T23:30:00Z"), Money.euros("350.00")),
+                new OverdraftLimitChanged(ID, Instant.parse("2026-03-04T08:00:00Z"), Money.euros("800.00")),
+                new MoneyDeposited(ID, Instant.parse("2026-03-05T12:00:00Z"), Money.euros("150.00")),
+                new AccountClosed(ID, Instant.parse("2026-03-05T12:05:00Z")));
+
+        List<StatementLine> lines = AccountStatement.of(history).lines();
+
+        assertThat(lines).containsExactly(
+                line("2026-03-01", "Account opened", "0.00", "0.00"),
+                line("2026-03-02", "Deposit", "200.00", "200.00"),
+                line("2026-03-03", "Withdrawal", "-350.00", "-150.00"),
+                line("2026-03-04", "Overdraft limit set to 800.00 EUR", "0.00", "-150.00"),
+                line("2026-03-05", "Deposit", "150.00", "0.00"),
+                line("2026-03-05", "Account closed", "0.00", "0.00"));
+    }
+
+    @Test
+    void takes_the_date_in_utc() {
+        // 23:30 UTC on 31 March is already 1 April in Berlin. The statement must say 31 March for everyone.
+        List<AccountEvent> history = List.of(
+                new AccountOpened(ID, Instant.parse("2026-03-31T23:30:00Z"), "Anna", Money.zero()));
+
+        assertThat(AccountStatement.of(history).lines()).extracting(StatementLine::date)
+                .containsExactly(LocalDate.of(2026, 3, 31));
+    }
+
+    @Test
+    void an_empty_history_has_no_lines() {
+        assertThat(AccountStatement.of(List.of()).lines()).isEmpty();
+    }
+
+    private static StatementLine line(String date, String description, String amount, String balance) {
+        return new StatementLine(
+                LocalDate.parse(date), description, Money.euros(amount), Money.euros(balance));
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -260,15 +1058,438 @@ Run: `mvn test -Dtest='**/task29/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task29/domain/Account.java -->
+**[`Account.java`](../solutions/src/main/java/io/github/chris013/practice/task29/domain/Account.java)**
+
+```java
+package io.github.chris013.practice.task29.domain;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * The account aggregate. Its balance is never stored: it is what you get when you replay the events.
+ *
+ * <p>Two kinds of methods, and the difference matters:
+ * <ul>
+ *   <li>Commands ({@link #deposit}, {@link #withdraw}, ...) check the rules against the current state. If the rules
+ *       pass, they record a new event. If not, they throw and record nothing.</li>
+ *   <li>{@link #apply} changes the state from an event. It never checks rules and never throws for business reasons,
+ *       because an event is a fact that already happened. Replaying old events must always work, even after a rule
+ *       has changed.</li>
+ * </ul>
+ *
+ * <p>Task 29: read {@code tasks/29-event-sourced-account.md} first.
+ */
+public final class Account {
+
+    private AccountId id;
+    private String owner;
+    private Money overdraftLimit;
+    private Money balance = Money.zero();
+    private boolean closed;
+    private long version;
+    private final List<AccountEvent> uncommitted = new ArrayList<>();
+
+    private Account() {
+    }
+
+    /** Opens a new account and records {@link AccountOpened}. The caller passes the clock reading as {@code now}. */
+    public static Account open(AccountId id, String owner, Money overdraftLimit, Instant now) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(owner, "owner");
+        Objects.requireNonNull(overdraftLimit, "overdraftLimit");
+        Objects.requireNonNull(now, "now");
+        if (owner.isBlank()) {
+            throw new IllegalArgumentException("owner must not be blank");
+        }
+        requireNonNegative(overdraftLimit, "overdraft limit");
+
+        Account account = new Account();
+        account.record(new AccountOpened(id, now, owner, overdraftLimit));
+        return account;
+    }
+
+    /**
+     * Rebuilds an account from its history. Nothing is uncommitted afterwards, and {@link #version()} equals the
+     * number of events. The history is checked for shape only (one account, opened once, first), not for business
+     * rules: an old history must load even if today's rules would refuse it.
+     */
+    public static Account replay(List<AccountEvent> history) {
+        Objects.requireNonNull(history, "history");
+        if (history.isEmpty()) {
+            throw new IllegalArgumentException("history must not be empty");
+        }
+        AccountEvent first = history.getFirst();
+        if (!(first instanceof AccountOpened)) {
+            throw new IllegalArgumentException(
+                    "history must start with AccountOpened, but starts with " + first.getClass().getSimpleName());
+        }
+        Account account = new Account();
+        for (AccountEvent event : history) {
+            if (!event.accountId().equals(first.accountId())) {
+                throw new IllegalArgumentException("event for account " + event.accountId().value()
+                        + " is in the history of account " + first.accountId().value());
+            }
+            if (event instanceof AccountOpened && account.version > 0) {
+                throw new IllegalArgumentException("history contains a second AccountOpened");
+            }
+            account.apply(event);
+        }
+        return account;
+    }
+
+    public void deposit(Money amount, Instant now) {
+        Objects.requireNonNull(amount, "amount");
+        Objects.requireNonNull(now, "now");
+        requirePositive(amount, "deposit amount");
+        requireOpen();
+        record(new MoneyDeposited(id, now, amount));
+    }
+
+    /**
+     * The balance may go down to minus the overdraft limit, and no further. The limit itself is allowed; one cent
+     * beyond it is refused.
+     */
+    public void withdraw(Money amount, Instant now) {
+        Objects.requireNonNull(amount, "amount");
+        Objects.requireNonNull(now, "now");
+        requirePositive(amount, "withdrawal amount");
+        requireOpen();
+        Money lowestAllowed = overdraftLimit.negate();
+        if (balance.minus(amount).isLessThan(lowestAllowed)) {
+            throw new InsufficientFundsException(amount, balance.plus(overdraftLimit));
+        }
+        record(new MoneyWithdrawn(id, now, amount));
+    }
+
+    /** The new limit may not be below the current debt, or the account would be overdrawn beyond its own limit. */
+    public void changeOverdraftLimit(Money newLimit, Instant now) {
+        Objects.requireNonNull(newLimit, "newLimit");
+        Objects.requireNonNull(now, "now");
+        requireNonNegative(newLimit, "overdraft limit");
+        requireOpen();
+        Money debt = balance.isNegative() ? balance.negate() : Money.zero();
+        if (newLimit.isLessThan(debt)) {
+            throw new IllegalStateException(
+                    "overdraft limit " + newLimit + " is below the current debt of " + debt);
+        }
+        record(new OverdraftLimitChanged(id, now, newLimit));
+    }
+
+    /** Only a settled account can be closed: the balance must be exactly zero. */
+    public void close(Instant now) {
+        Objects.requireNonNull(now, "now");
+        requireOpen();
+        if (balance.compareTo(Money.zero()) != 0) {
+            throw new IllegalStateException(
+                    "cannot close account " + id.value() + " while its balance is " + balance);
+        }
+        record(new AccountClosed(id, now));
+    }
+
+    public AccountId id() {
+        return id;
+    }
+
+    public String owner() {
+        return owner;
+    }
+
+    public Money balance() {
+        return balance;
+    }
+
+    public Money overdraftLimit() {
+        return overdraftLimit;
+    }
+
+    public boolean isClosed() {
+        return closed;
+    }
+
+    /** The number of events applied so far, committed and uncommitted together. Used as the expected version. */
+    public long version() {
+        return version;
+    }
+
+    /** The events recorded since the last {@link #markCommitted()}, as an unmodifiable copy. */
+    public List<AccountEvent> uncommittedEvents() {
+        return List.copyOf(uncommitted);
+    }
+
+    /** Call after the events have been stored. Clears the list so the next save writes only new events. */
+    public void markCommitted() {
+        uncommitted.clear();
+    }
+
+    /** Records the event as a new fact: applies it to the state and adds it to the uncommitted list. */
+    private void record(AccountEvent event) {
+        apply(event);
+        uncommitted.add(event);
+    }
+
+    /**
+     * Changes the state to match the event. No validation here, on purpose: this runs for new events and for every
+     * event in every old history. Adding a {@code default} branch would hide a new event type that nobody handled.
+     */
+    private void apply(AccountEvent event) {
+        switch (event) {
+            case AccountOpened opened -> {
+                id = opened.accountId();
+                owner = opened.owner();
+                overdraftLimit = opened.overdraftLimit();
+            }
+            case MoneyDeposited deposited -> balance = balance.plus(deposited.amount());
+            case MoneyWithdrawn withdrawn -> balance = balance.minus(withdrawn.amount());
+            case OverdraftLimitChanged changed -> overdraftLimit = changed.newLimit();
+            case AccountClosed _ -> closed = true;
+        }
+        version++;
+    }
+
+    private void requireOpen() {
+        if (closed) {
+            throw new AccountClosedException(id);
+        }
+    }
+
+    private static void requirePositive(Money amount, String what) {
+        if (amount.compareTo(Money.zero()) <= 0) {
+            throw new IllegalArgumentException(what + " must be positive, was " + amount);
+        }
+    }
+
+    private static void requireNonNegative(Money amount, String what) {
+        if (amount.isNegative()) {
+            throw new IllegalArgumentException(what + " must not be negative, was " + amount);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task29/application/AccountService.java -->
+**[`AccountService.java`](../solutions/src/main/java/io/github/chris013/practice/task29/application/AccountService.java)**
+
+```java
+package io.github.chris013.practice.task29.application;
+
+import io.github.chris013.practice.task29.domain.Account;
+import io.github.chris013.practice.task29.domain.AccountEvent;
+import io.github.chris013.practice.task29.domain.AccountId;
+import io.github.chris013.practice.task29.domain.Money;
+import java.time.Clock;
+import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
+
+/**
+ * Application service: the use cases for accounts. Each command loads the history, replays it, runs the command
+ * against that state, and appends the new events with the version it loaded. If another writer got in between,
+ * the store says so with a {@link ConcurrencyException}, and the whole cycle runs again on the newer state.
+ *
+ * <p>Task 29: read {@code tasks/29-event-sourced-account.md} first.
+ */
+public final class AccountService {
+
+    /** Total attempts for one command, including the first one. */
+    static final int MAX_ATTEMPTS = 3;
+
+    private final EventStore store;
+    private final Clock clock;
+    private final Supplier<AccountId> ids;
+
+    public AccountService(EventStore store, Clock clock, Supplier<AccountId> ids) {
+        this.store = Objects.requireNonNull(store, "store");
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.ids = Objects.requireNonNull(ids, "ids");
+    }
+
+    /** Opens a new account. A new stream must be created at version 0, so this never retries. */
+    public AccountId open(String owner, Money overdraftLimit) {
+        AccountId id = ids.get();
+        Objects.requireNonNull(id, "id");
+        Account account = Account.open(id, owner, overdraftLimit, clock.instant());
+        store.append(id, 0, account.uncommittedEvents());
+        account.markCommitted();
+        return id;
+    }
+
+    public void deposit(AccountId id, Money amount) {
+        Objects.requireNonNull(amount, "amount");
+        execute(id, account -> account.deposit(amount, clock.instant()));
+    }
+
+    public void withdraw(AccountId id, Money amount) {
+        Objects.requireNonNull(amount, "amount");
+        execute(id, account -> account.withdraw(amount, clock.instant()));
+    }
+
+    public void changeOverdraftLimit(AccountId id, Money newLimit) {
+        Objects.requireNonNull(newLimit, "newLimit");
+        execute(id, account -> account.changeOverdraftLimit(newLimit, clock.instant()));
+    }
+
+    public void close(AccountId id) {
+        execute(id, account -> account.close(clock.instant()));
+    }
+
+    public Money balanceOf(AccountId id) {
+        return load(id).balance();
+    }
+
+    /**
+     * Runs one command with optimistic concurrency. A business exception (insufficient funds, closed account, ...)
+     * leaves this method at once and is never retried: retrying cannot make a refused withdrawal valid.
+     */
+    private void execute(AccountId id, Consumer<Account> command) {
+        ConcurrencyException lastConflict = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            Account account = load(id);
+            long versionLoaded = account.version();
+            command.accept(account);
+            try {
+                store.append(id, versionLoaded, account.uncommittedEvents());
+                account.markCommitted();
+                return;
+            } catch (ConcurrencyException conflict) {
+                lastConflict = conflict;
+            }
+        }
+        throw lastConflict;
+    }
+
+    private Account load(AccountId id) {
+        Objects.requireNonNull(id, "id");
+        List<AccountEvent> history = store.load(id);
+        if (history.isEmpty()) {
+            throw new IllegalArgumentException("unknown account " + id.value());
+        }
+        return Account.replay(history);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task29/adapter/inmemory/InMemoryEventStore.java -->
+**[`InMemoryEventStore.java`](../solutions/src/main/java/io/github/chris013/practice/task29/adapter/inmemory/InMemoryEventStore.java)**
+
+```java
+package io.github.chris013.practice.task29.adapter.inmemory;
+
+import io.github.chris013.practice.task29.application.ConcurrencyException;
+import io.github.chris013.practice.task29.application.EventStore;
+import io.github.chris013.practice.task29.domain.AccountEvent;
+import io.github.chris013.practice.task29.domain.AccountId;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Keeps every stream in a map, for tests and demos. The version check and the write for one stream happen inside
+ * {@link Map#compute}, which holds that stream's bin lock. So two writers with the same expected version cannot both
+ * pass the check. Stored lists are never modified; each append stores a new immutable list.
+ */
+public final class InMemoryEventStore implements EventStore {
+
+    private final Map<AccountId, List<AccountEvent>> streams = new ConcurrentHashMap<>();
+
+    @Override
+    public List<AccountEvent> load(AccountId id) {
+        Objects.requireNonNull(id, "id");
+        return streams.getOrDefault(id, List.of());
+    }
+
+    @Override
+    public void append(AccountId id, long expectedVersion, List<AccountEvent> events) {
+        Objects.requireNonNull(id, "id");
+        List<AccountEvent> toAppend = List.copyOf(Objects.requireNonNull(events, "events"));
+        streams.compute(id, (key, existing) -> {
+            List<AccountEvent> current = existing == null ? List.of() : existing;
+            if (current.size() != expectedVersion) {
+                throw new ConcurrencyException(id, expectedVersion, current.size());
+            }
+            List<AccountEvent> next = new ArrayList<>(current.size() + toAppend.size());
+            next.addAll(current);
+            next.addAll(toAppend);
+            return List.copyOf(next);
+        });
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task29/projection/AccountStatement.java -->
+**[`AccountStatement.java`](../solutions/src/main/java/io/github/chris013/practice/task29/projection/AccountStatement.java)**
+
+```java
+package io.github.chris013.practice.task29.projection;
+
+import io.github.chris013.practice.task29.domain.AccountClosed;
+import io.github.chris013.practice.task29.domain.AccountEvent;
+import io.github.chris013.practice.task29.domain.AccountOpened;
+import io.github.chris013.practice.task29.domain.Money;
+import io.github.chris013.practice.task29.domain.MoneyDeposited;
+import io.github.chris013.practice.task29.domain.MoneyWithdrawn;
+import io.github.chris013.practice.task29.domain.OverdraftLimitChanged;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * A read model: the account statement, one line per event. It is built from the same events as {@code Account}
+ * but has its own switch and its own running balance. It does not call into the aggregate. Read models change for
+ * reasons of their own (a new column, a new report), and they should not force a change in the write side.
+ *
+ * <p>Dates are taken in UTC so that the same history gives the same statement on every machine.
+ */
+public final class AccountStatement {
+
+    private final List<StatementLine> lines;
+
+    private AccountStatement(List<StatementLine> lines) {
+        this.lines = lines;
+    }
+
+    public static AccountStatement of(List<AccountEvent> history) {
+        Objects.requireNonNull(history, "history");
+        List<StatementLine> lines = new ArrayList<>(history.size());
+        Money balance = Money.zero();
+        for (AccountEvent event : history) {
+            LocalDate date = LocalDate.ofInstant(event.occurredAt(), ZoneOffset.UTC);
+            switch (event) {
+                case AccountOpened _ ->
+                        lines.add(new StatementLine(date, "Account opened", Money.zero(), balance));
+                case MoneyDeposited deposited -> {
+                    balance = balance.plus(deposited.amount());
+                    lines.add(new StatementLine(date, "Deposit", deposited.amount(), balance));
+                }
+                case MoneyWithdrawn withdrawn -> {
+                    balance = balance.minus(withdrawn.amount());
+                    lines.add(new StatementLine(date, "Withdrawal", withdrawn.amount().negate(), balance));
+                }
+                case OverdraftLimitChanged changed ->
+                        lines.add(new StatementLine(
+                                date, "Overdraft limit set to " + changed.newLimit(), Money.zero(), balance));
+                case AccountClosed _ ->
+                        lines.add(new StatementLine(date, "Account closed", Money.zero(), balance));
+            }
+        }
+        return new AccountStatement(List.copyOf(lines));
+    }
+
+    public List<StatementLine> lines() {
+        return lines;
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

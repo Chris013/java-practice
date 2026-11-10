@@ -183,15 +183,467 @@ Run: `mvn test -Dtest='**/task28/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task28/StatisticsCollectorTest.java -->
+**[`StatisticsCollectorTest.java`](../src/test/java/io/github/chris013/practice/task28/StatisticsCollectorTest.java)**
+
+```java
+package io.github.chris013.practice.task28;
+
+import static io.github.chris013.practice.task28.TestReadings.assertSameStatistics;
+import static io.github.chris013.practice.task28.TestReadings.collectInTwoHalves;
+import static io.github.chris013.practice.task28.TestReadings.randomReadings;
+import static io.github.chris013.practice.task28.TestReadings.reading;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class StatisticsCollectorTest {
+
+    @Test
+    void a_single_reading_has_zero_standard_deviation() {
+        Statistics stats = statisticsOf(List.of(reading("s1", 21.5))).orElseThrow();
+
+        assertThat(stats.count()).isEqualTo(1);
+        assertThat(stats.min()).isEqualTo(21.5);
+        assertThat(stats.max()).isEqualTo(21.5);
+        assertThat(stats.mean()).isEqualTo(21.5);
+        assertThat(stats.standardDeviation()).isZero();
+    }
+
+    @Test
+    void computes_the_population_standard_deviation_of_a_known_data_set() {
+        // Classic textbook data: mean 5, sum of squared deviations 32, population variance 32 / 8 = 4.
+        List<Reading> readings = Stream.of(2, 4, 4, 4, 5, 5, 7, 9)
+                .map(value -> reading("s1", value))
+                .toList();
+
+        Statistics stats = statisticsOf(readings).orElseThrow();
+
+        assertThat(stats.count()).isEqualTo(8);
+        assertThat(stats.min()).isEqualTo(2.0);
+        assertThat(stats.max()).isEqualTo(9.0);
+        assertThat(stats.mean()).isEqualTo(5.0);
+        assertThat(stats.standardDeviation()).isEqualTo(2.0);
+    }
+
+    @Test
+    void empty_input_gives_no_statistics() {
+        assertThat(statisticsOf(List.of())).isEmpty();
+    }
+
+    @Nested
+    class NumericalStability {
+
+        // All values are about 1e9. A double has about 16 significant digits, so the squares are about 1e18 and
+        // each one is rounded to a multiple of 128. The variance is 22.5, which is a tiny part of that sum.
+        private static final List<Double> NEAR_A_BILLION = List.of(1e9 + 4, 1e9 + 7, 1e9 + 13, 1e9 + 16);
+
+        @Test
+        void welford_keeps_the_small_variance_when_the_values_are_large() {
+            Statistics stats = statisticsOf(NEAR_A_BILLION.stream().map(v -> reading("s1", v)).toList())
+                    .orElseThrow();
+
+            assertThat(stats.mean()).isCloseTo(1e9 + 10, within(1e-6));
+            assertThat(stats.standardDeviation()).isCloseTo(Math.sqrt(22.5), within(1e-6));
+        }
+
+        @Test
+        void the_textbook_formula_loses_the_variance_here() {
+            // E[x^2] and E[x]^2 are both about 1e18 and are rounded to multiples of 128. Their difference, which should
+            // be 22.5, comes out as -128, so sqrt returns NaN.
+            double naive = naiveStandardDeviation(NEAR_A_BILLION);
+
+            assertThat(naive).isNaN();
+        }
+
+        /** The formula most people write first. Kept here only to show that it is wrong. */
+        private static double naiveStandardDeviation(List<Double> values) {
+            double sum = 0;
+            double sumOfSquares = 0;
+            for (double value : values) {
+                sum += value;
+                sumOfSquares += value * value;
+            }
+            double n = values.size();
+            double mean = sum / n;
+            return Math.sqrt(sumOfSquares / n - mean * mean);
+        }
+    }
+
+    @Nested
+    class Combiner {
+
+        @Test
+        void merging_two_partial_results_gives_the_same_answer_as_one_pass() {
+            List<Reading> readings = randomReadings(1_000, 1, "s1");
+
+            Optional<Statistics> merged = collectInTwoHalves(SensorCollectors.statistics(), readings.subList(0, 400),
+                    readings.subList(400, readings.size()));
+
+            assertSameStatistics(merged.orElseThrow(), statisticsOf(readings).orElseThrow());
+        }
+
+        @Test
+        void merging_with_an_empty_half_keeps_the_other_half() {
+            List<Reading> readings = randomReadings(50, 2, "s1");
+            List<Reading> none = List.of();
+
+            assertSameStatistics(collectInTwoHalves(SensorCollectors.statistics(), readings, none).orElseThrow(),
+                    statisticsOf(readings).orElseThrow());
+            assertSameStatistics(collectInTwoHalves(SensorCollectors.statistics(), none, readings).orElseThrow(),
+                    statisticsOf(readings).orElseThrow());
+        }
+
+        @Test
+        void merging_two_empty_halves_gives_no_statistics() {
+            assertThat(collectInTwoHalves(SensorCollectors.statistics(), List.of(), List.of())).isEmpty();
+        }
+    }
+
+    @Nested
+    class Parallel {
+
+        @Test
+        void parallel_and_sequential_give_the_same_statistics_for_200000_readings() {
+            List<Reading> readings = randomReadings(200_000, 42, "s1", "s2", "s3");
+
+            Statistics sequential = readings.stream().collect(SensorCollectors.statistics()).orElseThrow();
+            Statistics parallel = readings.parallelStream().collect(SensorCollectors.statistics()).orElseThrow();
+
+            assertSameStatistics(parallel, sequential);
+        }
+    }
+
+    private static Optional<Statistics> statisticsOf(List<Reading> readings) {
+        return readings.stream().collect(SensorCollectors.statistics());
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task28/TopKCollectorTest.java -->
+**[`TopKCollectorTest.java`](../src/test/java/io/github/chris013/practice/task28/TopKCollectorTest.java)**
+
+```java
+package io.github.chris013.practice.task28;
+
+import static io.github.chris013.practice.task28.TestReadings.collectInTwoHalves;
+import static io.github.chris013.practice.task28.TestReadings.reading;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Random;
+import java.util.stream.Collector;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class TopKCollectorTest {
+
+    private static final Comparator<String> BY_LENGTH = Comparator.comparingInt(String::length);
+
+    @Test
+    void returns_the_k_greatest_elements_greatest_first() {
+        List<String> fruits = List.of("pear", "fig", "banana", "kiwi", "apple");
+
+        List<String> result = fruits.stream().collect(SensorCollectors.topK(2, BY_LENGTH));
+
+        assertThat(result).containsExactly("banana", "apple");
+    }
+
+    @Test
+    void returns_everything_when_k_is_larger_than_the_input() {
+        List<String> result = Stream.of("fig", "banana", "pear")
+                .collect(SensorCollectors.topK(10, BY_LENGTH));
+
+        assertThat(result).containsExactly("banana", "pear", "fig");
+    }
+
+    @Test
+    void k_of_one_is_the_maximum() {
+        List<String> result = Stream.of("fig", "banana", "pear")
+                .collect(SensorCollectors.topK(1, BY_LENGTH));
+
+        assertThat(result).containsExactly("banana");
+    }
+
+    @Test
+    void empty_input_gives_an_empty_list() {
+        List<String> result = Stream.<String>empty().collect(SensorCollectors.topK(3, BY_LENGTH));
+
+        assertThat(result).isEmpty();
+    }
+
+    @Test
+    void works_for_readings_ordered_by_temperature() {
+        List<Reading> readings = List.of(
+                reading("a", -1.0), reading("b", 5.0), reading("c", 2.5), reading("d", 9.0), reading("e", 0.0));
+
+        List<Reading> warmest = readings.stream()
+                .collect(SensorCollectors.topK(3, Comparator.comparingDouble(Reading::celsius)));
+
+        assertThat(warmest).extracting(Reading::sensorId).containsExactly("d", "b", "c");
+    }
+
+    @Test
+    void the_result_cannot_be_modified() {
+        List<String> result = Stream.of("fig", "banana").collect(SensorCollectors.topK(2, BY_LENGTH));
+
+        assertThatThrownBy(() -> result.add("kiwi")).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0", "-1", "-100"})
+    void needs_k_of_at_least_one(int k) {
+        assertThatThrownBy(() -> SensorCollectors.topK(k, BY_LENGTH))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void the_comparator_must_not_be_null() {
+        assertThatThrownBy(() -> SensorCollectors.topK(2, null)).isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void accepts_a_comparator_for_a_supertype_so_it_can_rank_strings() {
+        // PECS: the comparator only consumes elements, so a Comparator<Object> ranks a stream of Strings.
+        Comparator<Object> byText = Comparator.comparing(Object::toString);
+
+        List<String> result = Stream.of("pear", "apple", "zucchini").collect(SensorCollectors.topK(2, byText));
+
+        assertThat(result).containsExactly("zucchini", "pear");
+    }
+
+    @Nested
+    class Parallel {
+
+        @Test
+        void parallel_equals_sequential_when_there_are_no_ties() {
+            List<Integer> numbers = new ArrayList<>(IntStream.range(0, 100_000).boxed().toList());
+            Collections.shuffle(numbers, new Random(42));
+
+            List<Integer> sequential = numbers.stream().collect(SensorCollectors.topK(10, Comparator.naturalOrder()));
+            List<Integer> parallel = numbers.parallelStream()
+                    .collect(SensorCollectors.topK(10, Comparator.naturalOrder()));
+
+            assertThat(sequential).containsExactly(99_999, 99_998, 99_997, 99_996, 99_995,
+                    99_994, 99_993, 99_992, 99_991, 99_990);
+            assertThat(parallel).isEqualTo(sequential);
+        }
+
+        @Test
+        void merging_two_partial_heaps_keeps_only_k_elements() {
+            Collector<String, ?, List<String>> collector = SensorCollectors.topK(2, BY_LENGTH);
+
+            List<String> result = collectInTwoHalves(collector, List.of("fig", "banana"),
+                    List.of("strawberry", "kiwi"));
+
+            assertThat(result).containsExactly("strawberry", "banana");
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task28/ComposedCollectorsTest.java -->
+**[`ComposedCollectorsTest.java`](../src/test/java/io/github/chris013/practice/task28/ComposedCollectorsTest.java)**
+
+```java
+package io.github.chris013.practice.task28;
+
+import static io.github.chris013.practice.task28.TestReadings.assertSameStatistics;
+import static io.github.chris013.practice.task28.TestReadings.randomReadings;
+import static io.github.chris013.practice.task28.TestReadings.reading;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+import java.util.Map;
+import java.util.SortedMap;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class ComposedCollectorsTest {
+
+    @Nested
+    class StatisticsPerSensor {
+
+        @Test
+        void gives_one_entry_per_sensor_sorted_by_sensor_id() {
+            List<Reading> readings = List.of(
+                    reading("kitchen", 4.0), reading("dock", -18.0), reading("kitchen", 6.0), reading("dock", -16.0));
+
+            SortedMap<String, Statistics> perSensor = readings.stream()
+                    .collect(SensorCollectors.statisticsPerSensor());
+
+            assertThat(perSensor.keySet()).containsExactly("dock", "kitchen");
+            assertThat(perSensor.get("dock").count()).isEqualTo(2);
+            assertThat(perSensor.get("dock").mean()).isEqualTo(-17.0);
+            assertThat(perSensor.get("kitchen").mean()).isEqualTo(5.0);
+            assertThat(perSensor.get("kitchen").standardDeviation()).isEqualTo(1.0);
+        }
+
+        @Test
+        void the_map_cannot_be_modified() {
+            SortedMap<String, Statistics> perSensor = List.of(reading("dock", -18.0))
+                    .stream()
+                    .collect(SensorCollectors.statisticsPerSensor());
+
+            assertThatThrownBy(() -> perSensor.put("new", perSensor.get("dock")))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void empty_input_gives_an_empty_map() {
+            assertThat(List.<Reading>of().stream().collect(SensorCollectors.statisticsPerSensor())).isEmpty();
+        }
+
+        @Test
+        void parallel_equals_sequential_for_200000_readings() {
+            List<Reading> readings = randomReadings(200_000, 7, "dock", "freezer", "kitchen", "office");
+
+            SortedMap<String, Statistics> sequential = readings.stream()
+                    .collect(SensorCollectors.statisticsPerSensor());
+            SortedMap<String, Statistics> parallel = readings.parallelStream()
+                    .collect(SensorCollectors.statisticsPerSensor());
+
+            assertThat(parallel.keySet()).containsExactlyElementsOf(sequential.keySet());
+            sequential.forEach((sensor, stats) -> assertSameStatistics(parallel.get(sensor), stats));
+        }
+    }
+
+    @Nested
+    class CountAbove {
+
+        private static final List<Reading> READINGS = List.of(
+                reading("dock", -18.0), reading("dock", -2.0), reading("dock", -2.0), reading("dock", 3.0));
+
+        @Test
+        void counts_readings_strictly_above_the_threshold() {
+            Map<Boolean, Long> counts = READINGS.stream().collect(SensorCollectors.countAbove(-2.0));
+
+            // The two readings at exactly -2.0 are not above -2.0.
+            assertThat(counts).containsEntry(true, 1L).containsEntry(false, 3L);
+        }
+
+        @Test
+        void has_both_keys_when_no_reading_is_above() {
+            Map<Boolean, Long> counts = READINGS.stream().collect(SensorCollectors.countAbove(10.0));
+
+            assertThat(counts).containsEntry(true, 0L).containsEntry(false, 4L);
+        }
+
+        @Test
+        void has_both_keys_when_every_reading_is_above() {
+            Map<Boolean, Long> counts = READINGS.stream().collect(SensorCollectors.countAbove(-100.0));
+
+            assertThat(counts).containsEntry(true, 4L).containsEntry(false, 0L);
+        }
+
+        @Test
+        void has_both_keys_for_empty_input() {
+            Map<Boolean, Long> counts = List.<Reading>of().stream().collect(SensorCollectors.countAbove(0.0));
+
+            assertThat(counts).containsEntry(true, 0L).containsEntry(false, 0L);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"NaN", "Infinity", "-Infinity"})
+        void rejects_a_threshold_that_is_not_a_finite_number(double threshold) {
+            assertThatThrownBy(() -> SensorCollectors.countAbove(threshold))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void parallel_equals_sequential() {
+            List<Reading> readings = randomReadings(200_000, 11, "dock", "kitchen");
+
+            Map<Boolean, Long> sequential = readings.stream().collect(SensorCollectors.countAbove(-18.0));
+            Map<Boolean, Long> parallel = readings.parallelStream().collect(SensorCollectors.countAbove(-18.0));
+
+            assertThat(parallel).isEqualTo(sequential);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task28/TestReadings.java -->
+**[`TestReadings.java`](../src/test/java/io/github/chris013/practice/task28/TestReadings.java)**
+
+```java
+package io.github.chris013.practice.task28;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
+import java.util.stream.Collector;
+
+/** Builders and assertion helpers shared by the Task 28 tests. */
+final class TestReadings {
+
+    static final Instant AT = Instant.parse("2026-03-01T09:00:00Z");
+
+    private TestReadings() {
+    }
+
+    static Reading reading(String sensorId, double celsius) {
+        return new Reading(sensorId, AT, celsius);
+    }
+
+    /** Deterministic pseudo-random readings: cold-storage temperatures around -18 C, spread over the sensors. */
+    static List<Reading> randomReadings(int count, long seed, String... sensorIds) {
+        Random random = new Random(seed);
+        List<Reading> readings = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            String sensor = sensorIds[random.nextInt(sensorIds.length)];
+            readings.add(reading(sensor, -18.0 + 4.0 * random.nextGaussian()));
+        }
+        return readings;
+    }
+
+    /**
+     * Parallel reductions merge partial results in another order than a sequential pass, so the floating-point
+     * results can differ in the last bits. Count, min and max are exact; mean and deviation get a relative
+     * tolerance of 1e-9.
+     */
+    static void assertSameStatistics(Statistics actual, Statistics expected) {
+        assertThat(actual.count()).isEqualTo(expected.count());
+        assertThat(actual.min()).isEqualTo(expected.min());
+        assertThat(actual.max()).isEqualTo(expected.max());
+        assertThat(actual.mean()).isCloseTo(expected.mean(), within(Math.abs(expected.mean()) * 1e-9));
+        assertThat(actual.standardDeviation())
+                .isCloseTo(expected.standardDeviation(), within(Math.abs(expected.standardDeviation()) * 1e-9));
+    }
+
+    /** Splits the work the way a parallel stream does: two accumulators, merged with the combiner. */
+    static <T, A, R> R collectInTwoHalves(Collector<T, A, R> collector, List<T> left, List<T> right) {
+        A leftAccumulator = collector.supplier().get();
+        left.forEach(item -> collector.accumulator().accept(leftAccumulator, item));
+        A rightAccumulator = collector.supplier().get();
+        right.forEach(item -> collector.accumulator().accept(rightAccumulator, item));
+        A merged = collector.combiner().apply(leftAccumulator, rightAccumulator);
+        return collector.finisher().apply(merged);
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -240,6 +692,219 @@ Run: `mvn test -Dtest='**/task28/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task28/SensorCollectors.java -->
+**[`SensorCollectors.java`](../solutions/src/main/java/io/github/chris013/practice/task28/SensorCollectors.java)**
+
+```java
+package io.github.chris013.practice.task28;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.PriorityQueue;
+import java.util.SortedMap;
+import java.util.TreeMap;
+import java.util.stream.Collector;
+import java.util.stream.Collectors;
+
+/**
+ * Collectors for sensor readings: statistics, top-k, per-sensor summaries and threshold counts.
+ *
+ * <p>Every collector here keeps its state in its own accumulation container. None of them shares a list or a
+ * map between threads, so the same collector gives the same answer sequentially and in parallel.
+ */
+public final class SensorCollectors {
+
+    private SensorCollectors() {
+    }
+
+    /**
+     * Count, min, max, mean and population standard deviation in one pass, numerically stable.
+     *
+     * <p>Empty input gives {@link Optional#empty()}. A single reading gives a standard deviation of {@code 0}.
+     * The result must be the same sequentially and in parallel, within floating-point tolerance.
+     *
+     * <p>The accumulator is a {@link RunningStatistics} that uses Welford's online update, not the sums of
+     * {@code x} and {@code x*x}. The combiner uses Chan et al.'s merge, so two halves computed in parallel give the
+     * same result as one pass over everything. The finisher turns the accumulator into {@code Optional<Statistics>},
+     * so the characteristics are {@link Collector.Characteristics#UNORDERED} only:
+     * <ul>
+     *   <li>{@code IDENTITY_FINISH} is not set because the finisher really does change the type, from
+     *       {@code RunningStatistics} to {@code Optional<Statistics>}.</li>
+     *   <li>{@code UNORDERED} is fine: the order of the readings does not change the mathematical result. The
+     *       floating-point result can differ in the last few bits, which is why the tests compare with a tolerance.</li>
+     *   <li>{@code CONCURRENT} is not set: the accumulator is not thread-safe, and each thread gets its own.</li>
+     * </ul>
+     */
+    public static Collector<Reading, ?, Optional<Statistics>> statistics() {
+        return Collector.of(
+                RunningStatistics::new,
+                (running, reading) -> running.add(reading.celsius()),
+                RunningStatistics::merge,
+                RunningStatistics::toStatistics,
+                Collector.Characteristics.UNORDERED);
+    }
+
+    /**
+     * The {@code k} greatest elements according to {@code order}, greatest first, as an unmodifiable list.
+     *
+     * <p>A min-heap of at most {@code k} elements: its head is the smallest element we still keep. A new element
+     * replaces the head only when it is greater, so memory is O(k) and the time is O(n log k). Sorting all
+     * elements would cost O(n log n) time and O(n) memory for the same answer.
+     *
+     * <p>The parameter is {@code Comparator<? super T>} (PECS: the comparator consumes the elements), so you can pass
+     * a {@code Comparator<Object>} to rank Strings.
+     *
+     * <p>If the input has fewer than {@code k} elements, all of them are returned. Which of several equal elements
+     * is kept at the cut-off is unspecified.
+     *
+     * @throws IllegalArgumentException if {@code k} is less than 1
+     */
+    public static <T> Collector<T, ?, List<T>> topK(int k, Comparator<? super T> order) {
+        if (k < 1) {
+            throw new IllegalArgumentException("k must be at least 1, was " + k);
+        }
+        Objects.requireNonNull(order, "order");
+        return Collector.of(
+                () -> new BoundedHeap<T>(k, order),
+                BoundedHeap::offer,
+                BoundedHeap::merge,
+                BoundedHeap::greatestFirst,
+                Collector.Characteristics.UNORDERED);
+    }
+
+    /**
+     * Statistics per sensor. The per-sensor collector is an ordinary composition: {@code groupingBy} with a
+     * {@code TreeMap} so keys are sorted, {@link #statistics()} as the downstream collector, and
+     * {@code collectingAndThen} to take the value out of the {@code Optional} and make the map unmodifiable.
+     * A group always has at least one reading, so {@code orElseThrow} cannot fail. Empty input gives an empty map.
+     */
+    public static Collector<Reading, ?, SortedMap<String, Statistics>> statisticsPerSensor() {
+        Collector<Reading, ?, Statistics> oneSensor =
+                Collectors.collectingAndThen(statistics(), Optional::orElseThrow);
+        return Collectors.collectingAndThen(
+                Collectors.groupingBy(Reading::sensorId, TreeMap::new, oneSensor),
+                Collections::unmodifiableSortedMap);
+    }
+
+    /**
+     * Counts with {@link Collectors#partitioningBy partitioningBy}, which always creates both keys.
+     * A reading equal to the threshold is not above it. A NaN threshold would make every comparison false
+     * without any error, so it is rejected up front.
+     *
+     * @throws IllegalArgumentException if the threshold is NaN or infinite
+     */
+    public static Collector<Reading, ?, Map<Boolean, Long>> countAbove(double thresholdCelsius) {
+        if (!Double.isFinite(thresholdCelsius)) {
+            throw new IllegalArgumentException("threshold must be finite, was " + thresholdCelsius);
+        }
+        return Collectors.partitioningBy(
+                reading -> reading.celsius() > thresholdCelsius,
+                Collectors.counting());
+    }
+
+    /**
+     * Mutable accumulation state for {@link #statistics()}.
+     *
+     * <p>Welford's update for one new value {@code x}:
+     * {@code delta = x - mean; mean += delta / n; m2 += delta * (x - mean)}.
+     * Chan's merge for two parts A and B with {@code n = nA + nB}:
+     * {@code delta = meanB - meanA; mean = meanA + delta * nB / n; m2 = m2A + m2B + delta^2 * nA * nB / n}.
+     */
+    private static final class RunningStatistics {
+
+        private long count;
+        private double mean;
+        /** Sum of squared distances from the mean. Variance is {@code m2 / count}. */
+        private double m2;
+        private double min = Double.POSITIVE_INFINITY;
+        private double max = Double.NEGATIVE_INFINITY;
+
+        void add(double x) {
+            count++;
+            double delta = x - mean;
+            mean += delta / count;
+            m2 += delta * (x - mean);
+            min = Math.min(min, x);
+            max = Math.max(max, x);
+        }
+
+        RunningStatistics merge(RunningStatistics other) {
+            if (other.count == 0) {
+                return this;
+            }
+            if (count == 0) {
+                count = other.count;
+                mean = other.mean;
+                m2 = other.m2;
+                min = other.min;
+                max = other.max;
+                return this;
+            }
+            double nA = count;
+            double nB = other.count;
+            double n = nA + nB;
+            double delta = other.mean - mean;
+            mean += delta * (nB / n);
+            m2 += other.m2 + delta * delta * (nA * nB / n);
+            count += other.count;
+            min = Math.min(min, other.min);
+            max = Math.max(max, other.max);
+            return this;
+        }
+
+        Optional<Statistics> toStatistics() {
+            if (count == 0) {
+                return Optional.empty();
+            }
+            // m2 cannot be negative in exact arithmetic. The clamp only guards against rounding, so sqrt never sees a
+            // negative number.
+            double variance = Math.max(0.0, m2) / count;
+            return Optional.of(new Statistics(count, min, max, mean, Math.sqrt(variance)));
+        }
+    }
+
+    /**
+     * Keeps the {@code capacity} greatest elements seen so far. The heap's head is the least of them, so it is the
+     * element a new candidate has to beat.
+     */
+    private static final class BoundedHeap<T> {
+
+        private final int capacity;
+        private final Comparator<? super T> order;
+        private final PriorityQueue<T> smallestFirst;
+
+        BoundedHeap(int capacity, Comparator<? super T> order) {
+            this.capacity = capacity;
+            this.order = order;
+            this.smallestFirst = new PriorityQueue<>(order);
+        }
+
+        void offer(T element) {
+            if (smallestFirst.size() < capacity) {
+                smallestFirst.add(element);
+            } else if (order.compare(element, smallestFirst.peek()) > 0) {
+                smallestFirst.poll();
+                smallestFirst.add(element);
+            }
+        }
+
+        BoundedHeap<T> merge(BoundedHeap<T> other) {
+            other.smallestFirst.forEach(this::offer);
+            return this;
+        }
+
+        List<T> greatestFirst() {
+            List<T> sorted = new ArrayList<>(smallestFirst);
+            sorted.sort(order.reversed());
+            return List.copyOf(sorted);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

@@ -16,6 +16,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -62,6 +63,17 @@ class CatalogueTest {
 
             assertThat(result).hasSize(8);
             assertThat(result.get(0).sku()).isEqualTo("B-001");
+        }
+
+        @Test
+        void the_other_queries_also_accept_functions_written_for_a_supertype() {
+            Predicate<Object> any = o -> true;
+            Comparator<Object> byText = Comparator.comparing(Object::toString);
+            Function<Object, String> text = Object::toString;
+
+            assertThat(catalogue.findFirst(any, byText)).isPresent();
+            assertThat(catalogue.project(any, text)).hasSize(8);
+            assertThat(catalogue.countBy(any)).containsEntry(Category.FOOD, 2L);
         }
     }
 
@@ -170,7 +182,7 @@ class CatalogueTest {
 
             source.clear();
 
-            assertThat(copy.find(inStock().or(inStock().negate()), byPrice())).hasSize(8);
+            assertThat(copy.find(product -> true, byPrice())).hasSize(8);
         }
 
         @Test

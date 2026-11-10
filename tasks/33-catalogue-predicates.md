@@ -77,7 +77,7 @@ We do not invent our own `ProductMatcher` or `ProductSorter`. The JDK already ha
 | `Predicate<T>` | `boolean test(T)` | T to boolean | Filters. Composed with `and`, `or`, `negate` and `Predicate.not`. |
 | `Comparator<T>` | `int compare(T, T)` | two T to int | Sort orders. Built with `comparing`, `thenComparing` and `reversed`. |
 | `Function<T, R>` | `R apply(T)` | T to R | Projections, such as `Product::name`. Also used by `Collectors.groupingBy`. |
-| `Supplier<T>` | `T get()` | nothing to T | A factory, such as `() -> new EnumMap<>(Category.class)`. |
+| `Supplier<T>` | `T get()` | nothing to T | A factory, such as `() -> new ArrayList<Product>()`. |
 | `UnaryOperator<T>` | `T apply(T)` | T to T | Not used in this task. It fits a step like "apply a 10% discount to a price". |
 
 ## What I want from you
@@ -124,15 +124,15 @@ Implement the three utility classes and the `Catalogue`. The given records and e
 
 **Start with `ProductFilters`.** Write `inCategory` first, then `priceBetween`. Then check each factory against the table in the tests before you go on. Each factory is a method that returns a lambda capturing its arguments. You will find that a lambda is enough: no class, no field, no `this`.
 
-**Lambdas, not anonymous classes** (*Effective Java* Item 42). An anonymous class is a new class per use: it has a `this` that means something different inside than outside, and it needs an `@Override` and a method body. A lambda is shorter, and `this` inside it is the enclosing instance. An anonymous class is only needed when the interface has more than one abstract method. A functional interface has exactly one, so a lambda can stand in for it.
+**Lambdas, not anonymous classes** (*Effective Java* Item 42). An anonymous class is a new class per use: it has a `this` that means something different inside than outside, and it needs an `@Override` and a method body. A lambda is shorter, and `this` inside it is the enclosing instance. An anonymous class is only needed when you need state, several methods, or a type that is not a functional interface. A functional interface has exactly one abstract method, so a lambda can stand in for it.
 
 **Method references** (*Effective Java* Item 43) come in four kinds. Use the one that says the most:
-* static: `ProductFilters::inStock`, `Objects::nonNull`;
+* static: `Integer::parseInt`, `Objects::nonNull`;
 * bound instance: `Product.class::isInstance`, `System.out::println`;
 * unbound instance: `Product::price`, `String::length`;
 * constructor: `ArrayList::new`.
 
-A constructor that needs an argument, such as `() -> new EnumMap<>(Category.class)`, cannot be a constructor reference. It is a lambda.
+A constructor call with a fixed argument, such as `new StringBuilder("SKU-")`, cannot be a constructor reference, because the functional interface does not supply that argument. Use a lambda.
 
 `Product::price` reads better than `p -> p.price()`. If the lambda just calls one method with the argument, use the reference.
 
@@ -142,7 +142,7 @@ A constructor that needs an argument, such as `() -> new EnumMap<>(Category.clas
 
 **Why `? extends` in `allOf` and `anyOf`.** The list produces predicates that we only read, so the element type can be `? extends Predicate<? super Product>`. The predicates consume products, so each of them takes `? super Product`. Read the signature out loud and you have the rule.
 
-**Why `allOf(empty)` is true and `anyOf(empty)` is false.** These are identity elements. `a and b` gives the same result as `true and a and b`, so an empty conjunction is `true`. `a or b` equals `false or a or b`, so an empty disjunction is `false`. You can read `allOf` as a fold that starts from "always true" and combines each predicate with `and`. The version with `allMatch` says the same thing and is easier to read.
+**Why `allOf(empty)` is true and `anyOf(empty)` is false.** These are identity elements. `a and b` gives the same result as `true and a and b`, so an empty conjunction is `true`. `a or b` equals `false or a or b`, so an empty disjunction is `false`.
 
 **Comparators: the pitfalls.** The `reversed()` method is the trap:
 
@@ -155,7 +155,7 @@ A constructor that needs an argument, such as `() -> new EnumMap<>(Category.clas
 
 **Locale.** `toLowerCase()` without a locale depends on the machine. Use `toLowerCase(Locale.ROOT)` for both sides of a search.
 
-**The catalogue.** Four methods run the same first step: filter the products. Put that step in one private helper. Be careful with `Stream.min`: on a tie it keeps the element that comes first, and our `findFirst` depends on that. The test on ties pins it down.
+**The catalogue.** Four methods run the same first step: filter the products. Keep that step in one place. On a tie, `findFirst` must return the product that comes first in the catalogue; a test pins that down.
 
 ## Tests
 
@@ -224,6 +224,7 @@ Four test classes use one fixed catalogue of eight products in [`SampleProducts`
 **5. `Catalogue` has one private helper for the filter step.** Four methods start the same way. The helper does the `null` check and the stream, so the null check cannot be forgotten in one method. The result types are immutable: `Stream.toList()` for lists and `Collections.unmodifiableMap` for the count.
 
 **6. The utility classes have a private constructor that throws.** `ProductFilters` and `ProductOrder` cannot be instantiated by normal code. The private constructor throws `AssertionError`, as *Effective Java* Item 4 recommends.
+
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task33/ProductFilters.java -->

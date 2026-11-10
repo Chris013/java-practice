@@ -54,6 +54,16 @@ Some tasks have a different shape, and their text says so: refactoring tasks sta
 | 28 | [Write your own Collectors](tasks/28-custom-collectors.md) | 🟡 Medium | The `Collector` interface, parallel-safe combiners, Welford's algorithm, PECS |
 | 29 | [An event-sourced bank account](tasks/29-event-sourced-account.md) | 🔴 Hard | Event sourcing, optimistic concurrency with retry, projections |
 | 30 | [A tiny JSON writer](tasks/30-json-writer.md) | 🟡 Medium | Sealed value model, RFC 8259 escaping, reflection on records, annotations, cycle detection |
+| 31 | [A meeting invite with a proper Builder](tasks/31-meeting-invite-builder.md) | 🟢 Easy | Builder, static factories, immutability, validating in `build()`, `toBuilder()` |
+| 32 | [Where does the parcel go? Optional done right](tasks/32-optional-delivery-address.md) | 🟢 Easy | `Optional` as a return type, `flatMap`/`filter`/`or`, `Optional.stream()`, laziness |
+| 33 | [Filtering the warehouse catalogue](tasks/33-catalogue-predicates.md) | 🟢 Easy | Behaviour parameterization, `Predicate` and `Comparator` composition, method references |
+| 34 | [The itinerary that changed by itself](tasks/34-immutable-itinerary.md) | 🟢 Easy | Minimizing mutability, defensive copies, copy before validating, `java.util.Date` pitfalls |
+| 35 | [The scan counter that counted twice](tasks/35-counting-set-composition.md) | 🟢 Easy | Composition over inheritance, self-use, forwarding classes, the `Set` contract |
+| 36 | [Reading a sorted access log with streams](tasks/36-access-log-streams.md) | 🟢 Easy | `takeWhile`/`dropWhile`, `flatMap`, `Stream.iterate`, `partitioningBy`, side-effect-free streams |
+| 37 | [Why bin 200 was never found](tasks/37-boxed-primitive-traps.md) | 🟢 Easy | Boxed primitives: the Integer cache, unboxing `null`, `remove(int)` vs `remove(Object)`, broken comparators |
+| 38 | [A loyalty points ledger with the modern Map API](tasks/38-loyalty-points-map-api.md) | 🟢 Easy | `merge`, `compute*`, `getOrDefault`, `removeIf`, `replaceAll`, collection factories, `EnumMap` |
+| 39 | [Evolving a published interface with default methods](tasks/39-default-methods-sensors.md) | 🟢 Easy | Default and static interface methods, resolution rules, skeletal implementations |
+| 40 | [Retire the anonymous classes](tasks/40-lambdas-refactor-coupons.md) | 🟢 Easy | Refactoring design patterns to lambdas, `Function.andThen`, characterization tests |
 
 🟢 Easy · 🟡 Medium · 🔴 Hard · ⚫ Expert. The order mixes topics and difficulties on purpose, but every task stands on its own.
 

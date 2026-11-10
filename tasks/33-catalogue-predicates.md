@@ -172,18 +172,675 @@ Four test classes use one fixed catalogue of eight products in [`SampleProducts`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task33/SampleProducts.java -->
+**[`SampleProducts.java`](../src/test/java/io/github/chris013/practice/task33/SampleProducts.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+/**
+ * A fixed catalogue of eight products, used by all tests. The list order in {@link #all()} is the
+ * catalogue (insertion) order. The values are chosen so that boundaries and ties are easy to see.
+ */
+final class SampleProducts {
+
+    static final Product CLAW_HAMMER = product("T-100", "Claw hammer", Category.TOOLS, "12.50", 4, 600);
+    static final Product CORDLESS_DRILL = product("T-200", "Cordless drill", Category.TOOLS, "89.00", 0, 1800);
+    static final Product ROLLED_OATS = product("F-010", "Rolled oats 1kg", Category.FOOD, "2.49", 30, 1000);
+    static final Product OLIVE_OIL = product("F-020", "Olive oil", Category.FOOD, "7.90", 12, 750);
+    static final Product PLUSH_BEAR = product("Y-001", "Plush bear", Category.TOYS, "15.00", 8, 300);
+    static final Product WOODEN_TRAIN = product("Y-002", "Wooden train set", Category.TOYS, "15.00", 0, 1200);
+    static final Product HAMMER_HANDBOOK = product("B-001", "Hammer handbook", Category.BOOKS, "19.99", 2, 450);
+    static final Product GARDENING_BOOK = product("B-002", "Gardening for beginners", Category.BOOKS, "5.00", 6, 400);
+
+    private SampleProducts() {
+    }
+
+    static List<Product> all() {
+        return List.of(CLAW_HAMMER, CORDLESS_DRILL, ROLLED_OATS, OLIVE_OIL,
+                PLUSH_BEAR, WOODEN_TRAIN, HAMMER_HANDBOOK, GARDENING_BOOK);
+    }
+
+    static Product product(String sku, String name, Category category, String price, int stock, int weightGrams) {
+        return new Product(sku, name, category, new BigDecimal(price), stock, weightGrams);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task33/ProductTest.java -->
+**[`ProductTest.java`](../src/test/java/io/github/chris013/practice/task33/ProductTest.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+/**
+ * Tests for the given record. They pass on the starter too: they pin down the validation that the rest of the
+ * task relies on.
+ */
+class ProductTest {
+
+    @Nested
+    class Validation {
+
+        @Test
+        void accepts_a_free_product_with_no_stock() {
+            assertThatCode(() -> SampleProducts.product("X-1", "Free sample", Category.FOOD, "0", 0, 1))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        void rejects_a_null_sku_name_category_or_price() {
+            BigDecimal price = BigDecimal.ONE;
+
+            assertThatThrownBy(() -> new Product(null, "n", Category.FOOD, price, 1, 1))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new Product("s", null, Category.FOOD, price, 1, 1))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new Product("s", "n", null, price, 1, 1))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new Product("s", "n", Category.FOOD, null, 1, 1))
+                    .isInstanceOf(NullPointerException.class);
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "' ', n",
+            "'', n",
+            "s, ' '"
+        })
+        void rejects_a_blank_sku_or_name(String sku, String name) {
+            assertThatThrownBy(() -> new Product(sku, name, Category.FOOD, BigDecimal.ONE, 1, 1))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_negative_price() {
+            assertThatThrownBy(() -> SampleProducts.product("s", "n", Category.FOOD, "-0.01", 1, 1))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_negative_stock() {
+            assertThatThrownBy(() -> new Product("s", "n", Category.FOOD, BigDecimal.ONE, -1, 1))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0", "-5"})
+        void rejects_a_weight_that_is_not_positive(int weightGrams) {
+            assertThatThrownBy(() -> new Product("s", "n", Category.FOOD, BigDecimal.ONE, 1, weightGrams))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task33/ProductFiltersTest.java -->
+**[`ProductFiltersTest.java`](../src/test/java/io/github/chris013/practice/task33/ProductFiltersTest.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import static io.github.chris013.practice.task33.ProductFilters.allOf;
+import static io.github.chris013.practice.task33.ProductFilters.anyOf;
+import static io.github.chris013.practice.task33.ProductFilters.heavierThan;
+import static io.github.chris013.practice.task33.ProductFilters.inCategory;
+import static io.github.chris013.practice.task33.ProductFilters.inStock;
+import static io.github.chris013.practice.task33.ProductFilters.nameContains;
+import static io.github.chris013.practice.task33.ProductFilters.priceBetween;
+import static io.github.chris013.practice.task33.SampleProducts.CLAW_HAMMER;
+import static io.github.chris013.practice.task33.SampleProducts.CORDLESS_DRILL;
+import static io.github.chris013.practice.task33.SampleProducts.GARDENING_BOOK;
+import static io.github.chris013.practice.task33.SampleProducts.HAMMER_HANDBOOK;
+import static io.github.chris013.practice.task33.SampleProducts.OLIVE_OIL;
+import static io.github.chris013.practice.task33.SampleProducts.PLUSH_BEAR;
+import static io.github.chris013.practice.task33.SampleProducts.ROLLED_OATS;
+import static io.github.chris013.practice.task33.SampleProducts.WOODEN_TRAIN;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.function.Predicate;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class ProductFiltersTest {
+
+    private static List<Product> matching(Predicate<Product> predicate) {
+        return SampleProducts.all().stream().filter(predicate).toList();
+    }
+
+    @Nested
+    class InCategory {
+
+        @Test
+        void matches_only_products_of_that_category() {
+            assertThat(matching(inCategory(Category.TOOLS))).containsExactly(CLAW_HAMMER, CORDLESS_DRILL);
+        }
+
+        @Test
+        void rejects_a_null_category() {
+            assertThatThrownBy(() -> inCategory(null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class PriceBetween {
+
+        @Test
+        void includes_both_bounds_when_prices_are_exactly_on_them() {
+            assertThat(matching(priceBetween(new BigDecimal("5.00"), new BigDecimal("15.00"))))
+                    .containsExactly(CLAW_HAMMER, OLIVE_OIL, PLUSH_BEAR, WOODEN_TRAIN, GARDENING_BOOK);
+        }
+
+        // The min and max are compared by value, so the scale of the BigDecimal does not matter.
+        @ParameterizedTest
+        @CsvSource({
+            "15, 15, 2",
+            "15.000, 15.0, 2",
+            "15.01, 19.99, 1",
+            "5.00, 5.00, 1",
+            "5.01, 7.89, 0"
+        })
+        void counts_matches_for_each_boundary_case(String min, String max, int expectedCount) {
+            assertThat(matching(priceBetween(new BigDecimal(min), new BigDecimal(max)))).hasSize(expectedCount);
+        }
+
+        @Test
+        void rejects_a_minimum_above_the_maximum() {
+            assertThatThrownBy(() -> priceBetween(new BigDecimal("16"), new BigDecimal("15")))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_null_bounds() {
+            assertThatThrownBy(() -> priceBetween(null, BigDecimal.TEN)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> priceBetween(BigDecimal.ONE, null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class InStock {
+
+        @Test
+        void excludes_products_with_zero_stock() {
+            assertThat(matching(inStock())).containsExactly(
+                    CLAW_HAMMER, ROLLED_OATS, OLIVE_OIL, PLUSH_BEAR, HAMMER_HANDBOOK, GARDENING_BOOK);
+        }
+    }
+
+    @Nested
+    class NameContains {
+
+        @ParameterizedTest
+        @CsvSource({
+            "hammer, 2",
+            "HAMMER, 2",
+            "HaMmEr, 2",
+            "oil, 1",
+            "xyz, 0",
+            "'', 8"
+        })
+        void matches_case_insensitively_anywhere_in_the_name(String text, int expectedCount) {
+            assertThat(matching(nameContains(text))).hasSize(expectedCount);
+        }
+
+        @Test
+        void returns_the_matching_products_in_catalogue_order() {
+            assertThat(matching(nameContains("hammer"))).containsExactly(CLAW_HAMMER, HAMMER_HANDBOOK);
+        }
+
+        @Test
+        void rejects_null_text() {
+            assertThatThrownBy(() -> nameContains(null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class HeavierThan {
+
+        @Test
+        void is_strict_so_a_product_of_exactly_that_weight_is_excluded() {
+            assertThat(matching(heavierThan(1000))).containsExactly(CORDLESS_DRILL, WOODEN_TRAIN);
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "999, 3",
+            "1000, 2",
+            "1199, 2",
+            "1200, 1",
+            "1800, 0"
+        })
+        void counts_matches_around_each_weight(int grams, int expectedCount) {
+            assertThat(matching(heavierThan(grams))).hasSize(expectedCount);
+        }
+    }
+
+    @Nested
+    class AllOf {
+
+        @Test
+        void an_empty_list_matches_everything() {
+            assertThat(matching(allOf(List.of()))).hasSize(8);
+        }
+
+        @Test
+        void matches_only_when_every_predicate_matches() {
+            assertThat(matching(allOf(List.of(inCategory(Category.TOOLS), inStock())))).containsExactly(CLAW_HAMMER);
+        }
+
+        @Test
+        void copies_the_list_so_later_changes_do_not_affect_the_filter() {
+            List<Predicate<Product>> conditions = new ArrayList<>(List.of(inStock()));
+            Predicate<Product> filter = allOf(conditions);
+
+            conditions.add(inCategory(Category.TOYS));
+
+            assertThat(matching(filter)).hasSize(6);
+        }
+
+        @Test
+        void rejects_a_null_list_or_a_null_element() {
+            assertThatThrownBy(() -> allOf(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> allOf(Arrays.asList(inStock(), null)))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class AnyOf {
+
+        @Test
+        void an_empty_list_matches_nothing() {
+            assertThat(matching(anyOf(List.of()))).isEmpty();
+        }
+
+        @Test
+        void matches_when_at_least_one_predicate_matches() {
+            Predicate<Product> books = inCategory(Category.BOOKS);
+            Predicate<Product> cheap = priceBetween(BigDecimal.ZERO, BigDecimal.valueOf(3));
+
+            assertThat(matching(anyOf(List.of(books, cheap))))
+                    .containsExactly(ROLLED_OATS, HAMMER_HANDBOOK, GARDENING_BOOK);
+        }
+
+        @Test
+        void rejects_a_null_list_or_a_null_element() {
+            assertThatThrownBy(() -> anyOf(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> anyOf(Arrays.asList(inStock(), null)))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Composition {
+
+        @Test
+        void and_combines_two_filters() {
+            assertThat(matching(inCategory(Category.TOYS).and(inStock()))).containsExactly(PLUSH_BEAR);
+        }
+
+        @Test
+        void or_combines_two_filters() {
+            assertThat(matching(inCategory(Category.BOOKS).or(heavierThan(1500))))
+                    .containsExactly(CORDLESS_DRILL, HAMMER_HANDBOOK, GARDENING_BOOK);
+        }
+
+        @Test
+        void negate_inverts_a_filter() {
+            assertThat(matching(inStock().negate())).containsExactly(CORDLESS_DRILL, WOODEN_TRAIN);
+        }
+
+        @Test
+        void predicate_not_is_the_same_as_negate() {
+            assertThat(matching(Predicate.not(inStock()))).containsExactly(CORDLESS_DRILL, WOODEN_TRAIN);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task33/ProductOrderTest.java -->
+**[`ProductOrderTest.java`](../src/test/java/io/github/chris013/practice/task33/ProductOrderTest.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import static io.github.chris013.practice.task33.SampleProducts.product;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.Comparator;
+import java.util.List;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class ProductOrderTest {
+
+    private static List<String> skusSortedBy(Comparator<Product> order) {
+        return SampleProducts.all().stream().sorted(order).map(Product::sku).toList();
+    }
+
+    @Nested
+    class ByPrice {
+
+        @Test
+        void sorts_the_cheapest_first() {
+            assertThat(skusSortedBy(ProductOrder.byPrice()))
+                    .containsExactly("F-010", "B-002", "F-020", "T-100", "Y-001", "Y-002", "B-001", "T-200");
+        }
+
+        @Test
+        void compares_prices_by_value_not_by_scale() {
+            Comparator<Product> order = ProductOrder.byPrice();
+
+            assertThat(order.compare(product("A", "a", Category.FOOD, "5.0", 1, 1),
+                    product("B", "b", Category.FOOD, "5.00", 1, 1))).isZero();
+        }
+
+        @Test
+        void keeps_the_catalogue_order_for_equal_prices() {
+            assertThat(skusSortedBy(ProductOrder.byPrice())).containsSubsequence("Y-001", "Y-002");
+        }
+    }
+
+    @Nested
+    class ByStockDescending {
+
+        @Test
+        void sorts_the_most_items_first() {
+            assertThat(skusSortedBy(ProductOrder.byStockDescending()))
+                    .containsExactly("F-010", "F-020", "Y-001", "B-002", "T-100", "B-001", "T-200", "Y-002");
+        }
+
+        @Test
+        void treats_equal_stock_as_a_tie_and_keeps_the_catalogue_order() {
+            Comparator<Product> order = ProductOrder.byStockDescending();
+
+            assertThat(order.compare(SampleProducts.CORDLESS_DRILL, SampleProducts.WOODEN_TRAIN)).isZero();
+            assertThat(skusSortedBy(order)).containsSubsequence("T-200", "Y-002");
+        }
+    }
+
+    @Nested
+    class ByCategoryThenName {
+
+        @Test
+        void groups_by_category_in_enum_order_then_sorts_by_name() {
+            assertThat(skusSortedBy(ProductOrder.byCategoryThenName()))
+                    .containsExactly("F-020", "F-010", "T-100", "T-200", "Y-001", "Y-002", "B-002", "B-001");
+        }
+
+        @Test
+        void compares_names_ignoring_case() {
+            Comparator<Product> order = ProductOrder.byCategoryThenName();
+            Product banana = product("1", "Banana", Category.FOOD, "1", 1, 1);
+            Product apple = product("2", "apple", Category.FOOD, "1", 1, 1);
+
+            // Case-sensitive order would put "Banana" first, because 'B' comes before 'a'.
+            assertThat(order.compare(apple, banana)).isNegative();
+        }
+
+        @Test
+        void an_earlier_category_wins_even_when_its_name_is_later() {
+            Comparator<Product> order = ProductOrder.byCategoryThenName();
+            Product zebraFood = product("1", "Zebra", Category.FOOD, "1", 1, 1);
+            Product aardvarkBook = product("2", "Aardvark", Category.BOOKS, "1", 1, 1);
+
+            assertThat(order.compare(zebraFood, aardvarkBook)).isNegative();
+        }
+    }
+
+    @Nested
+    class CheapestThenLightest {
+
+        @Test
+        void sorts_by_price_and_then_by_weight() {
+            assertThat(skusSortedBy(ProductOrder.cheapestThenLightest()))
+                    .containsExactly("F-010", "B-002", "F-020", "T-100", "Y-001", "Y-002", "B-001", "T-200");
+        }
+
+        @Test
+        void a_lighter_product_wins_a_price_tie() {
+            Comparator<Product> order = ProductOrder.cheapestThenLightest();
+            Product heavy = product("Y-9", "Heavy", Category.TOYS, "15.00", 1, 1200);
+            Product light = product("Y-1", "Light", Category.TOYS, "15.00", 1, 300);
+
+            assertThat(order.compare(light, heavy)).isNegative();
+        }
+
+        @Test
+        void the_sku_decides_when_price_and_weight_are_equal() {
+            Comparator<Product> order = ProductOrder.cheapestThenLightest();
+            Product b2 = product("B-2", "Same", Category.BOOKS, "3.00", 1, 100);
+            Product b1 = product("B-1", "Same", Category.BOOKS, "3.00", 1, 100);
+
+            assertThat(order.compare(b1, b2)).isNegative();
+            assertThat(order.compare(b2, b1)).isPositive();
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task33/CatalogueTest.java -->
+**[`CatalogueTest.java`](../src/test/java/io/github/chris013/practice/task33/CatalogueTest.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import static io.github.chris013.practice.task33.ProductFilters.heavierThan;
+import static io.github.chris013.practice.task33.ProductFilters.inCategory;
+import static io.github.chris013.practice.task33.ProductFilters.inStock;
+import static io.github.chris013.practice.task33.ProductOrder.byPrice;
+import static io.github.chris013.practice.task33.ProductOrder.byStockDescending;
+import static io.github.chris013.practice.task33.SampleProducts.CLAW_HAMMER;
+import static io.github.chris013.practice.task33.SampleProducts.CORDLESS_DRILL;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class CatalogueTest {
+
+    private final Catalogue catalogue = new Catalogue(SampleProducts.all());
+
+    @Nested
+    class Find {
+
+        @Test
+        void returns_the_matches_sorted_by_the_given_order() {
+            assertThat(catalogue.find(inStock(), byPrice()))
+                    .extracting(Product::sku)
+                    .containsExactly("F-010", "B-002", "F-020", "T-100", "Y-001", "B-001");
+        }
+
+        @Test
+        void returns_an_empty_list_when_nothing_matches() {
+            assertThat(catalogue.find(inCategory(Category.TOYS).and(heavierThan(5000)), byPrice())).isEmpty();
+        }
+
+        @Test
+        void returns_an_immutable_list() {
+            List<Product> result = catalogue.find(inStock(), byPrice());
+
+            assertThatThrownBy(() -> result.add(CLAW_HAMMER)).isInstanceOf(UnsupportedOperationException.class);
+            assertThatThrownBy(result::clear).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void rejects_null_arguments() {
+            assertThatThrownBy(() -> catalogue.find(null, byPrice())).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> catalogue.find(inStock(), null)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void accepts_a_predicate_and_comparator_written_for_a_supertype() {
+            Predicate<Object> isProduct = Product.class::isInstance;
+            Comparator<Object> byText = Comparator.comparing(Object::toString);
+
+            List<Product> result = catalogue.find(isProduct, byText);
+
+            assertThat(result).hasSize(8);
+            assertThat(result.get(0).sku()).isEqualTo("B-001");
+        }
+
+        @Test
+        void the_other_queries_also_accept_functions_written_for_a_supertype() {
+            Predicate<Object> any = o -> true;
+            Comparator<Object> byText = Comparator.comparing(Object::toString);
+            Function<Object, String> text = Object::toString;
+
+            assertThat(catalogue.findFirst(any, byText)).isPresent();
+            assertThat(catalogue.project(any, text)).hasSize(8);
+            assertThat(catalogue.countBy(any)).containsEntry(Category.FOOD, 2L);
+        }
+    }
+
+    @Nested
+    class FindFirst {
+
+        @Test
+        void returns_the_first_match_in_the_given_order() {
+            assertThat(catalogue.findFirst(inCategory(Category.TOOLS), byPrice()))
+                    .contains(CLAW_HAMMER);
+        }
+
+        @Test
+        void returns_empty_when_nothing_matches() {
+            assertThat(catalogue.findFirst(heavierThan(5000), byPrice())).isEqualTo(Optional.empty());
+        }
+
+        @Test
+        void on_a_tie_returns_the_product_that_comes_first_in_the_catalogue() {
+            // Both are out of stock, so the comparator sees a tie.
+            Predicate<Product> outOfStock = inStock().negate();
+
+            assertThat(catalogue.findFirst(outOfStock, byStockDescending())).contains(CORDLESS_DRILL);
+        }
+
+        @Test
+        void rejects_null_arguments() {
+            assertThatThrownBy(() -> catalogue.findFirst(null, byPrice())).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> catalogue.findFirst(inStock(), null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Project {
+
+        @Test
+        void maps_the_matches_in_catalogue_order_not_sorted_order() {
+            assertThat(catalogue.project(inCategory(Category.BOOKS), Product::name))
+                    .containsExactly("Hammer handbook", "Gardening for beginners");
+        }
+
+        @Test
+        void can_map_to_any_type() {
+            assertThat(catalogue.project(inCategory(Category.TOYS), Product::weightGrams))
+                    .containsExactly(300, 1200);
+        }
+
+        @Test
+        void returns_an_empty_immutable_list_when_nothing_matches() {
+            List<String> names = catalogue.project(heavierThan(5000), Product::name);
+
+            assertThat(names).isEmpty();
+            assertThatThrownBy(() -> names.add("x")).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void rejects_null_arguments() {
+            assertThatThrownBy(() -> catalogue.project(null, Product::name))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> catalogue.project(inStock(), null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class CountBy {
+
+        @Test
+        void counts_the_matches_per_category() {
+            assertThat(catalogue.countBy(inStock()))
+                    .isEqualTo(Map.of(Category.FOOD, 2L, Category.TOOLS, 1L, Category.TOYS, 1L, Category.BOOKS, 2L));
+        }
+
+        @Test
+        void leaves_out_categories_without_a_match() {
+            assertThat(catalogue.countBy(heavierThan(1000)))
+                    .isEqualTo(Map.of(Category.TOOLS, 1L, Category.TOYS, 1L))
+                    .doesNotContainKeys(Category.FOOD, Category.BOOKS);
+        }
+
+        @Test
+        void returns_an_empty_map_when_nothing_matches() {
+            assertThat(catalogue.countBy(heavierThan(5000))).isEmpty();
+        }
+
+        @Test
+        void returns_an_unmodifiable_map() {
+            Map<Category, Long> counts = catalogue.countBy(inStock());
+
+            assertThatThrownBy(() -> counts.put(Category.TOYS, 9L)).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void rejects_a_null_filter() {
+            assertThatThrownBy(() -> catalogue.countBy(null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Construction {
+
+        @Test
+        void copies_the_input_so_later_changes_do_not_leak_in() {
+            List<Product> source = new ArrayList<>(SampleProducts.all());
+            Catalogue copy = new Catalogue(source);
+
+            source.clear();
+
+            assertThat(copy.find(product -> true, byPrice())).hasSize(8);
+        }
+
+        @Test
+        void rejects_null_input_and_null_products() {
+            assertThatThrownBy(() -> new Catalogue(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new Catalogue(Arrays.asList(CLAW_HAMMER, null)))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -228,12 +885,198 @@ Four test classes use one fixed catalogue of eight products in [`SampleProducts`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task33/ProductFilters.java -->
+**[`ProductFilters.java`](../solutions/src/main/java/io/github/chris013/practice/task33/ProductFilters.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.function.Predicate;
+
+/**
+ * Reusable predicates for the catalogue search screen. Each factory returns a lambda that captures its arguments.
+ * Combine them with {@link Predicate#and}, {@link Predicate#or}, {@link Predicate#negate}, {@link Predicate#not},
+ * or with {@link #allOf} and {@link #anyOf} when the list of conditions comes from the user.
+ */
+public final class ProductFilters {
+
+    private ProductFilters() {
+        throw new AssertionError("no instances");
+    }
+
+    public static Predicate<Product> inCategory(Category category) {
+        Objects.requireNonNull(category, "category");
+        return product -> product.category() == category;
+    }
+
+    /**
+     * Both bounds are inclusive. The comparison uses {@code compareTo}, so {@code 15} and {@code 15.00}
+     * are the same bound.
+     */
+    public static Predicate<Product> priceBetween(BigDecimal minInclusive, BigDecimal maxInclusive) {
+        Objects.requireNonNull(minInclusive, "minInclusive");
+        Objects.requireNonNull(maxInclusive, "maxInclusive");
+        if (minInclusive.compareTo(maxInclusive) > 0) {
+            throw new IllegalArgumentException("min %s is above max %s".formatted(minInclusive, maxInclusive));
+        }
+        return product -> product.price().compareTo(minInclusive) >= 0
+                && product.price().compareTo(maxInclusive) <= 0;
+    }
+
+    public static Predicate<Product> inStock() {
+        return product -> product.stock() > 0;
+    }
+
+    /**
+     * The text is lower-cased with {@link Locale#ROOT}, not the default locale. In Turkish, the default
+     * locale maps {@code I} to a dotless letter, and a search for "ITEM" would silently fail.
+     */
+    public static Predicate<Product> nameContains(String text) {
+        Objects.requireNonNull(text, "text");
+        String needle = text.toLowerCase(Locale.ROOT);
+        return product -> product.name().toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    public static Predicate<Product> heavierThan(int grams) {
+        return product -> product.weightGrams() > grams;
+    }
+
+    /**
+     * The list is copied, so the caller can change its own list later without changing this filter.
+     * An empty list gives an empty conjunction, which is true for every product.
+     */
+    public static Predicate<Product> allOf(List<? extends Predicate<? super Product>> predicates) {
+        List<Predicate<? super Product>> copy = List.copyOf(Objects.requireNonNull(predicates, "predicates"));
+        return product -> copy.stream().allMatch(predicate -> predicate.test(product));
+    }
+
+    /** An empty list gives an empty disjunction, which is false for every product. */
+    public static Predicate<Product> anyOf(List<? extends Predicate<? super Product>> predicates) {
+        List<Predicate<? super Product>> copy = List.copyOf(Objects.requireNonNull(predicates, "predicates"));
+        return product -> copy.stream().anyMatch(predicate -> predicate.test(product));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task33/ProductOrder.java -->
+**[`ProductOrder.java`](../solutions/src/main/java/io/github/chris013/practice/task33/ProductOrder.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import java.util.Comparator;
+
+/**
+ * Reusable comparators for the catalogue search screen. Each one is a single-purpose comparator, and the
+ * combined ones are built from small pieces with {@code thenComparing}.
+ */
+public final class ProductOrder {
+
+    private ProductOrder() {
+        throw new AssertionError("no instances");
+    }
+
+    public static Comparator<Product> byPrice() {
+        return Comparator.comparing(Product::price);
+    }
+
+    /**
+     * {@code reversed()} is applied to the single key comparator here. Applied to a whole chain, it would
+     * also reverse the tie-breakers (see the Key decisions in the task).
+     */
+    public static Comparator<Product> byStockDescending() {
+        return Comparator.comparingInt(Product::stock).reversed();
+    }
+
+    public static Comparator<Product> byCategoryThenName() {
+        return Comparator.comparing(Product::category)
+                .thenComparing(Product::name, String.CASE_INSENSITIVE_ORDER);
+    }
+
+    /**
+     * Ends with the SKU, so two different products never compare as equal. A sort by this comparator gives
+     * the same result every time, whatever order the products came in.
+     */
+    public static Comparator<Product> cheapestThenLightest() {
+        return Comparator.comparing(Product::price)
+                .thenComparingInt(Product::weightGrams)
+                .thenComparing(Product::sku);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task33/Catalogue.java -->
+**[`Catalogue.java`](../solutions/src/main/java/io/github/chris013/practice/task33/Catalogue.java)**
+
+```java
+package io.github.chris013.practice.task33;
+
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * An in-memory, read-only view over a set of products. One generic {@code find} replaces one method per query.
+ */
+public final class Catalogue {
+
+    private final List<Product> products;
+
+    /** Copies the collection. Later changes to the caller's collection do not show up here. */
+    public Catalogue(Collection<Product> products) {
+        this.products = List.copyOf(Objects.requireNonNull(products, "products"));
+    }
+
+    public List<Product> find(Predicate<? super Product> filter, Comparator<? super Product> order) {
+        Objects.requireNonNull(order, "order");
+        return matching(filter).sorted(order).toList();
+    }
+
+    /**
+     * {@code Stream.min} keeps the earlier element when two are equal, so on a tie the product that comes
+     * first in the catalogue wins.
+     */
+    public Optional<Product> findFirst(Predicate<? super Product> filter, Comparator<? super Product> order) {
+        Objects.requireNonNull(order, "order");
+        return matching(filter).min(order);
+    }
+
+    public <R> List<R> project(Predicate<? super Product> filter, Function<? super Product, ? extends R> mapper) {
+        Objects.requireNonNull(mapper, "mapper");
+        return matching(filter).<R>map(mapper).toList();
+    }
+
+    /**
+     * Only categories with at least one match appear as keys. The map is in enum order and is unmodifiable.
+     */
+    public Map<Category, Long> countBy(Predicate<? super Product> filter) {
+        Map<Category, Long> counts = matching(filter)
+                .collect(Collectors.groupingBy(Product::category,
+                        () -> new EnumMap<>(Category.class),
+                        Collectors.counting()));
+        return Collections.unmodifiableMap(counts);
+    }
+
+    private Stream<Product> matching(Predicate<? super Product> filter) {
+        Objects.requireNonNull(filter, "filter");
+        return products.stream().filter(filter);
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

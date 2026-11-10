@@ -143,9 +143,494 @@ Run: `mvn test -Dtest='**/task35/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task35/CountingSetTest.java -->
+**[`CountingSetTest.java`](../src/test/java/io/github/chris013/practice/task35/CountingSetTest.java)**
+
+```java
+package io.github.chris013.practice.task35;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
+import java.util.function.Supplier;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Named;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
+
+class CountingSetTest {
+
+    @Nested
+    class Counting {
+
+        @Test
+        void add_all_of_null_throws_and_counts_nothing() {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            assertThatThrownBy(() -> set.addAll(null)).isInstanceOf(NullPointerException.class);
+
+            assertThat(set.addAttempts()).isZero();
+        }
+
+        @Test
+        void add_counts_one_attempt_and_one_item() {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            boolean added = set.add("4006381333931");
+
+            assertThat(added).isTrue();
+            assertThat(set.addAttempts()).isEqualTo(1);
+            assertThat(set.size()).isEqualTo(1);
+        }
+
+        @Test
+        void a_new_hash_set_starts_at_zero() {
+            assertThat(CountingSet.overHashSet().addAttempts()).isZero();
+            assertThat(CountingSet.overHashSet().size()).isZero();
+        }
+
+        @Test
+        void a_duplicate_add_counts_as_an_attempt_but_not_as_an_item() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.add("A");
+
+            boolean added = set.add("A");
+
+            assertThat(added).isFalse();
+            assertThat(set.addAttempts()).isEqualTo(2);
+            assertThat(set.size()).isEqualTo(1);
+        }
+
+        @ParameterizedTest(name = "add of [{0}] gives {1} attempts and {2} items")
+        @CsvSource({
+            "'A',           1, 1",
+            "'A A',         2, 1",
+            "'A B C',       3, 3",
+            "'A A B',       3, 2",
+            "'A B A C B',   5, 3"
+        })
+        void add_counts_every_attempt_but_only_distinct_items(String barcodes, int attempts, int items) {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            for (String barcode : barcodes.split(" ")) {
+                set.add(barcode);
+            }
+
+            assertThat(set.addAttempts()).isEqualTo(attempts);
+            assertThat(set.size()).isEqualTo(items);
+        }
+
+        @Test
+        void add_all_counts_each_element_once() {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            set.addAll(List.of("A", "B", "C"));
+
+            assertThat(set.addAttempts()).isEqualTo(3);
+            assertThat(set.size()).isEqualTo(3);
+        }
+
+        @ParameterizedTest(name = "addAll of [{0}] gives {1} attempts and {2} items")
+        @CsvSource({
+            "'A',           1, 1",
+            "'A A',         2, 1",
+            "'A B C',       3, 3",
+            "'A A B',       3, 2",
+            "'A B A C B',   5, 3"
+        })
+        void add_all_counts_every_element_including_duplicates_in_the_batch(
+                String barcodes, int attempts, int items) {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            set.addAll(List.of(barcodes.split(" ")));
+
+            assertThat(set.addAttempts()).isEqualTo(attempts);
+            assertThat(set.size()).isEqualTo(items);
+        }
+
+        @Test
+        void an_empty_add_all_counts_nothing_and_changes_nothing() {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            boolean changed = set.addAll(List.of());
+
+            assertThat(changed).isFalse();
+            assertThat(set.addAttempts()).isZero();
+            assertThat(set).isEmpty();
+        }
+
+        @Test
+        void add_all_reports_whether_anything_new_was_added() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.add("A");
+
+            assertThat(set.addAll(List.of("A"))).isFalse();
+            assertThat(set.addAll(List.of("A", "B"))).isTrue();
+            assertThat(set.addAttempts()).isEqualTo(4);
+        }
+
+        @Test
+        void single_adds_and_batches_add_up() {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            set.add("A");
+            set.addAll(List.of("B", "C"));
+            set.add("A");
+
+            assertThat(set.addAttempts()).isEqualTo(4);
+            assertThat(set.size()).isEqualTo(3);
+        }
+
+        @Test
+        void retain_all_and_remove_do_not_count_as_attempts() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.addAll(List.of("A", "B", "C"));
+
+            set.retainAll(List.of("B", "C", "D"));
+            set.remove("B");
+
+            assertThat(set.addAttempts()).isEqualTo(3);
+            assertThat(set).containsExactly("C");
+        }
+
+        @Test
+        void remove_all_and_clear_do_not_count_as_attempts() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.addAll(List.of("A", "B", "C", "D"));
+
+            set.removeAll(List.of("A"));
+            set.clear();
+
+            assertThat(set.addAttempts()).isEqualTo(4);
+            assertThat(set).isEmpty();
+        }
+    }
+
+    @Nested
+    class WorksOverAnySet {
+
+        static Stream<Named<Supplier<Set<String>>>> backingSets() {
+            return Stream.of(
+                    Named.<Supplier<Set<String>>>of("HashSet", HashSet::new),
+                    Named.<Supplier<Set<String>>>of("TreeSet", TreeSet::new),
+                    Named.<Supplier<Set<String>>>of("LinkedHashSet", LinkedHashSet::new));
+        }
+
+        @ParameterizedTest(name = "over {0}")
+        @MethodSource("backingSets")
+        void counts_attempts_and_items_over_any_set(Supplier<Set<String>> backing) {
+            CountingSet<String> set = new CountingSet<>(backing.get());
+
+            set.add("A");
+            set.addAll(List.of("B", "C", "A"));
+
+            assertThat(set.addAttempts()).isEqualTo(4);
+            assertThat(set.size()).isEqualTo(3);
+        }
+
+        @Test
+        void tree_set_iteration_stays_sorted() {
+            CountingSet<String> set = new CountingSet<>(new TreeSet<>());
+
+            set.addAll(List.of("C", "A", "B"));
+
+            assertThat(set).containsExactly("A", "B", "C");
+        }
+
+        @Test
+        void linked_hash_set_keeps_insertion_order() {
+            CountingSet<String> set = new CountingSet<>(new LinkedHashSet<>());
+
+            set.addAll(List.of("C", "A", "B"));
+
+            assertThat(set).containsExactly("C", "A", "B");
+        }
+    }
+
+    @Nested
+    class SetContract {
+
+        @Test
+        void equals_a_hash_set_with_the_same_elements_in_both_directions() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.addAll(List.of("A", "B"));
+            Set<String> plain = new HashSet<>(List.of("B", "A"));
+
+            assertThat(set).isEqualTo(plain);
+            assertThat(plain).isEqualTo(set);
+            assertThat(set.hashCode()).isEqualTo(plain.hashCode());
+        }
+
+        @Test
+        void a_set_with_different_elements_is_not_equal() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.add("A");
+
+            assertThat(set).isNotEqualTo(new HashSet<>(List.of("B")));
+        }
+
+        @Test
+        void to_string_is_the_same_as_the_delegates() {
+            Set<String> delegate = new LinkedHashSet<>(List.of("A", "B"));
+            CountingSet<String> set = new CountingSet<>(delegate);
+
+            assertThat(set.toString()).isEqualTo("[A, B]").isEqualTo(delegate.toString());
+        }
+
+        @Test
+        void remove_and_contains_work() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.add("A");
+
+            assertThat(set.contains("A")).isTrue();
+            assertThat(set.remove("A")).isTrue();
+            assertThat(set.contains("A")).isFalse();
+            assertThat(set.remove("A")).isFalse();
+        }
+
+        @Test
+        void retain_all_keeps_only_the_common_elements() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.addAll(List.of("A", "B", "C"));
+
+            boolean changed = set.retainAll(List.of("B", "C", "D"));
+
+            assertThat(changed).isTrue();
+            assertThat(set).containsExactlyInAnyOrder("B", "C");
+        }
+
+        @Test
+        void iterator_remove_works() {
+            CountingSet<String> set = CountingSet.overHashSet();
+            set.addAll(List.of("A", "B", "C"));
+
+            var iterator = set.iterator();
+            while (iterator.hasNext()) {
+                if (iterator.next().equals("B")) {
+                    iterator.remove();
+                }
+            }
+
+            assertThat(set).containsExactlyInAnyOrder("A", "C");
+            assertThat(set.size()).isEqualTo(2);
+        }
+    }
+
+    @Nested
+    class Delegation {
+
+        @Test
+        void changes_through_the_wrapper_show_up_in_the_delegate() {
+            Set<String> delegate = new HashSet<>();
+            CountingSet<String> set = new CountingSet<>(delegate);
+
+            set.add("A");
+
+            assertThat(delegate).containsExactly("A");
+        }
+
+        @Test
+        void changes_in_the_delegate_show_up_through_the_wrapper() {
+            Set<String> delegate = new HashSet<>();
+            CountingSet<String> set = new CountingSet<>(delegate);
+
+            delegate.add("B");
+
+            assertThat(set).containsExactly("B");
+            assertThat(set.size()).isEqualTo(1);
+        }
+
+        @Test
+        void the_wrapper_is_a_view_not_a_copy() {
+            Set<String> delegate = new HashSet<>(List.of("A", "B"));
+            CountingSet<String> set = new CountingSet<>(delegate);
+
+            delegate.clear();
+
+            assertThat(set).isEmpty();
+        }
+
+        @Test
+        void rejects_a_null_delegate() {
+            assertThatThrownBy(() -> new CountingSet<String>(null))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("delegate");
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task35/ForwardingSetTest.java -->
+**[`ForwardingSetTest.java`](../src/test/java/io/github/chris013/practice/task35/ForwardingSetTest.java)**
+
+```java
+package io.github.chris013.practice.task35;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+class ForwardingSetTest {
+
+    @Test
+    void rejects_a_null_delegate() {
+        assertThatThrownBy(() -> new ForwardingSet<String>(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("delegate");
+    }
+
+    @Nested
+    class Forwarding {
+
+        static Stream<Arguments> set_methods() {
+            return Stream.of(
+                    Arguments.of("size()", (Consumer<Set<String>>) s -> s.size()),
+                    Arguments.of("isEmpty()", (Consumer<Set<String>>) s -> s.isEmpty()),
+                    Arguments.of("contains(Object)", (Consumer<Set<String>>) s -> s.contains("A")),
+                    Arguments.of("iterator()", (Consumer<Set<String>>) s -> s.iterator()),
+                    Arguments.of("toArray()", (Consumer<Set<String>>) s -> s.toArray()),
+                    Arguments.of("toArray(Object[])", (Consumer<Set<String>>) s -> s.toArray(new String[0])),
+                    Arguments.of("toArray(IntFunction)", (Consumer<Set<String>>) s -> s.toArray(String[]::new)),
+                    Arguments.of("add(Object)", (Consumer<Set<String>>) s -> s.add("C")),
+                    Arguments.of("remove(Object)", (Consumer<Set<String>>) s -> s.remove("A")),
+                    Arguments.of("containsAll(Collection)", (Consumer<Set<String>>) s -> s.containsAll(List.of("A"))),
+                    Arguments.of("addAll(Collection)", (Consumer<Set<String>>) s -> s.addAll(List.of("C"))),
+                    Arguments.of("retainAll(Collection)", (Consumer<Set<String>>) s -> s.retainAll(List.of("A"))),
+                    Arguments.of("removeAll(Collection)", (Consumer<Set<String>>) s -> s.removeAll(List.of("A"))),
+                    Arguments.of("removeIf(Predicate)", (Consumer<Set<String>>) s -> s.removeIf("A"::equals)),
+                    Arguments.of("clear()", (Consumer<Set<String>>) s -> s.clear()),
+                    Arguments.of("forEach(Consumer)", (Consumer<Set<String>>) s -> s.forEach(x -> { })),
+                    Arguments.of("spliterator()", (Consumer<Set<String>>) s -> s.spliterator()),
+                    Arguments.of("equals(Object)", (Consumer<Set<String>>) s -> s.equals(Set.of())),
+                    Arguments.of("hashCode()", (Consumer<Set<String>>) s -> s.hashCode()),
+                    Arguments.of("toString()", (Consumer<Set<String>>) s -> s.toString()));
+        }
+
+        @ParameterizedTest(name = "forwards {0}")
+        @MethodSource("set_methods")
+        void forwards_every_set_method_to_the_delegate(String method, Consumer<Set<String>> call) {
+            List<String> delegateCalls = new ArrayList<>();
+            Set<String> wrapper = new ForwardingSet<>(recording(new LinkedHashSet<>(List.of("A", "B")), delegateCalls));
+
+            call.accept(wrapper);
+
+            assertThat(delegateCalls).contains(method);
+        }
+
+        @Test
+        void returns_what_the_delegate_returns() {
+            Set<String> wrapper = new ForwardingSet<>(new HashSet<>(List.of("A", "B")));
+
+            assertThat(wrapper.size()).isEqualTo(2);
+            assertThat(wrapper.contains("A")).isTrue();
+            assertThat(wrapper.add("A")).isFalse();
+            assertThat(wrapper.add("C")).isTrue();
+            assertThat(wrapper.removeAll(List.of("C", "Z"))).isTrue();
+            assertThat(wrapper).containsExactlyInAnyOrder("A", "B");
+        }
+
+        @Test
+        void a_wrapper_equals_and_hashes_like_the_delegate() {
+            Set<String> delegate = new HashSet<>(List.of("A", "B"));
+            Set<String> wrapper = new ForwardingSet<>(delegate);
+
+            assertThat(wrapper).isEqualTo(delegate);
+            assertThat(delegate).isEqualTo(wrapper);
+            assertThat(wrapper.hashCode()).isEqualTo(delegate.hashCode());
+            assertThat(wrapper.toString()).isEqualTo(delegate.toString());
+        }
+    }
+
+    @Nested
+    class SelfUse {
+
+        /** Counts calls to {@code add} made on the wrapper itself. */
+        private static final class AddCountingSet extends ForwardingSet<String> {
+
+            int adds;
+
+            AddCountingSet(Set<String> delegate) {
+                super(delegate);
+            }
+
+            @Override
+            public boolean add(String element) {
+                adds++;
+                return super.add(element);
+            }
+        }
+
+        @Test
+        void add_all_does_not_call_the_overridden_add_of_the_wrapper() {
+            AddCountingSet wrapper = new AddCountingSet(new HashSet<>());
+
+            wrapper.addAll(List.of("A", "B"));
+
+            assertThat(wrapper.adds).isZero();
+            assertThat(wrapper).containsExactlyInAnyOrder("A", "B");
+        }
+
+        @Test
+        void is_empty_does_not_call_the_overridden_size_of_the_wrapper() {
+            Set<String> wrapper = new ForwardingSet<>(new HashSet<>()) {
+                @Override
+                public int size() {
+                    throw new AssertionError("self-use: isEmpty must not call size");
+                }
+            };
+
+            assertThat(wrapper.isEmpty()).isTrue();
+        }
+    }
+
+    /**
+     * A Set that behaves like {@code real} and records the signature of every method called on it, such as
+     * {@code toArray(IntFunction)}. The proxy exists so the test can see which delegate method gets called,
+     * without a hand-written Set of twenty methods.
+     */
+    @SuppressWarnings("unchecked") // the proxy implements Set, so the cast cannot fail
+    private static Set<String> recording(Set<String> real, Collection<String> calls) {
+        return (Set<String>) Proxy.newProxyInstance(
+                Set.class.getClassLoader(),
+                new Class<?>[] {Set.class},
+                (proxy, method, args) -> {
+                    calls.add(method.getName() + Arrays.stream(method.getParameterTypes())
+                            .map(Class::getSimpleName)
+                            .collect(Collectors.joining(",", "(", ")")));
+                    try {
+                        return method.invoke(real, args);
+                    } catch (InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -192,12 +677,267 @@ Run: `mvn test -Dtest='**/task35/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task35/InheritedScanCounter.java -->
+**[`InheritedScanCounter.java`](../solutions/src/main/java/io/github/chris013/practice/task35/InheritedScanCounter.java)**
+
+```java
+package io.github.chris013.practice.task35;
+
+import java.io.Serial;
+import java.util.Collection;
+import java.util.HashSet;
+
+/**
+ * <b>Broken. Kept for comparison only, do not use.</b>
+ *
+ * <p>This class counts scans by overriding {@code add} and {@code addAll} of {@link HashSet}. It
+ * double-counts every batch upload. {@link HashSet} does not override {@code addAll}; it inherits
+ * {@link java.util.AbstractCollection#addAll}, which calls {@code add} once per element. So
+ * {@code addAll(of 3 barcodes)} runs our {@code addAll}, which adds 3, and then 3 more calls to our
+ * {@code add}. The result is 6 attempts for 3 scans. The superclass's internal calls are an
+ * implementation detail, and we depend on them without knowing it.
+ */
+public class InheritedScanCounter extends HashSet<String> {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    private int attempts;
+
+    @Override
+    public boolean add(String barcode) {
+        attempts++;
+        return super.add(barcode);
+    }
+
+    @Override
+    public boolean addAll(Collection<? extends String> barcodes) {
+        attempts += barcodes.size();
+        return super.addAll(barcodes);
+    }
+
+    public int addAttempts() {
+        return attempts;
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task35/ForwardingSet.java -->
+**[`ForwardingSet.java`](../solutions/src/main/java/io/github/chris013/practice/task35/ForwardingSet.java)**
+
+```java
+package io.github.chris013.practice.task35;
+
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.Objects;
+import java.util.Set;
+import java.util.Spliterator;
+import java.util.function.Consumer;
+import java.util.function.IntFunction;
+import java.util.function.Predicate;
+
+/**
+ * A {@link Set} that forwards every call to another set, its delegate.
+ *
+ * <p>This is the base for wrappers such as {@link CountingSet}. A subclass overrides only the methods it
+ * wants to change, and all other calls pass through to the delegate.
+ *
+ * <p>Task 35: read {@code tasks/35-counting-set-composition.md} first.
+ *
+ * <p>This class is not final, so it is designed for extension. It documents one rule: <b>no self-use</b>.
+ * No method of this class calls another overridable method of this class. For example,
+ * {@link #isEmpty()} asks the delegate, not {@code size()}, and {@link #addAll} hands the batch to the
+ * delegate's {@code addAll} instead of looping over {@code add}. So an override in a subclass runs exactly
+ * when the caller invokes that method, and never as a side effect of another method. Contrast
+ * {@link java.util.AbstractCollection#addAll}, which calls {@code add} for each element. That is the bug
+ * in {@link InheritedScanCounter}.
+ *
+ * <p>The wrapper is a view, not a copy. Changes through it show up in the delegate and the other way
+ * round. {@code equals}, {@code hashCode} and {@code toString} are forwarded too, so a wrapper equals any
+ * set with the same elements, in both directions.
+ */
+public class ForwardingSet<E> implements Set<E> {
+
+    private final Set<E> delegate;
+
+    /**
+     * @param delegate the set that holds the elements; must not be {@code null}
+     * @throws NullPointerException if {@code delegate} is {@code null}
+     */
+    public ForwardingSet(Set<E> delegate) {
+        this.delegate = Objects.requireNonNull(delegate, "delegate");
+    }
+
+    @Override
+    public int size() {
+        return delegate.size();
+    }
+
+    @Override
+    public boolean isEmpty() {
+        return delegate.isEmpty();
+    }
+
+    @Override
+    public boolean contains(Object o) {
+        return delegate.contains(o);
+    }
+
+    @Override
+    public Iterator<E> iterator() {
+        return delegate.iterator();
+    }
+
+    @Override
+    public Object[] toArray() {
+        return delegate.toArray();
+    }
+
+    @Override
+    public <T> T[] toArray(T[] a) {
+        return delegate.toArray(a);
+    }
+
+    @Override
+    public <T> T[] toArray(IntFunction<T[]> generator) {
+        return delegate.toArray(generator);
+    }
+
+    @Override
+    public boolean add(E e) {
+        return delegate.add(e);
+    }
+
+    @Override
+    public boolean remove(Object o) {
+        return delegate.remove(o);
+    }
+
+    @Override
+    public boolean containsAll(Collection<?> c) {
+        return delegate.containsAll(c);
+    }
+
+    @Override
+    public boolean addAll(Collection<? extends E> c) {
+        return delegate.addAll(c);
+    }
+
+    @Override
+    public boolean retainAll(Collection<?> c) {
+        return delegate.retainAll(c);
+    }
+
+    @Override
+    public boolean removeAll(Collection<?> c) {
+        return delegate.removeAll(c);
+    }
+
+    @Override
+    public boolean removeIf(Predicate<? super E> filter) {
+        return delegate.removeIf(filter);
+    }
+
+    @Override
+    public void clear() {
+        delegate.clear();
+    }
+
+    @Override
+    public void forEach(Consumer<? super E> action) {
+        delegate.forEach(action);
+    }
+
+    @Override
+    public Spliterator<E> spliterator() {
+        return delegate.spliterator();
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        return delegate.equals(o);
+    }
+
+    @Override
+    public int hashCode() {
+        return delegate.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return delegate.toString();
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task35/CountingSet.java -->
+**[`CountingSet.java`](../solutions/src/main/java/io/github/chris013/practice/task35/CountingSet.java)**
+
+```java
+package io.github.chris013.practice.task35;
+
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
+
+/**
+ * A set of distinct items that also counts every attempted add, duplicates included.
+ *
+ * <p>{@link #size()} is the number of distinct items, inherited from {@link ForwardingSet}. Use
+ * {@link #addAttempts()} for the number of scans received. The counting happens here, in the wrapper, and
+ * the delegate is only asked to store the items. Because {@link ForwardingSet#addAll} hands the whole batch
+ * to the delegate and never calls {@link #add}, each element of a batch is counted exactly once.
+ *
+ * <p>Task 35: read {@code tasks/35-counting-set-composition.md} first.
+ *
+ * <p>The class is final. Counting is the whole contract, and a subclass could change what an "attempt"
+ * means and break the dashboard numbers without anyone noticing.
+ */
+public final class CountingSet<E> extends ForwardingSet<E> {
+
+    private int attempts;
+
+    /**
+     * @param delegate the set that stores the items; must not be {@code null}
+     * @throws NullPointerException if {@code delegate} is {@code null}
+     */
+    public CountingSet(Set<E> delegate) {
+        super(delegate);
+    }
+
+    /** A counting set over a new, empty {@link HashSet}. */
+    public static <E> CountingSet<E> overHashSet() {
+        return new CountingSet<>(new HashSet<>());
+    }
+
+    @Override
+    public boolean add(E element) {
+        attempts++;
+        return super.add(element);
+    }
+
+    /**
+     * Counts one attempt per element of {@code elements}, duplicates included. The count is taken from
+     * the argument's size before the delegate runs, so a batch that fails half way is still counted in full.
+     *
+     * @throws NullPointerException if {@code elements} is null; nothing is counted then
+     */
+    @Override
+    public boolean addAll(Collection<? extends E> elements) {
+        Objects.requireNonNull(elements, "elements");
+        attempts += elements.size();
+        return super.addAll(elements);
+    }
+
+    /** Every attempted add so far, including adds of items that were already in the set. */
+    public int addAttempts() {
+        return attempts;
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

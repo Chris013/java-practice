@@ -191,12 +191,296 @@ Run: `mvn test -Dtest='**/task39/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task39/TemperatureSensorTest.java -->
+**[`TemperatureSensorTest.java`](../src/test/java/io/github/chris013/practice/task39/TemperatureSensorTest.java)**
+
+```java
+package io.github.chris013.practice.task39;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
+
+import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class TemperatureSensorTest {
+
+    @Nested
+    class Fahrenheit {
+
+        @ParameterizedTest
+        @CsvSource({"-40, -40", "0, 32", "100, 212", "36.6, 97.88"})
+        void converts_celsius_to_fahrenheit(double celsius, double expectedFahrenheit) {
+            TemperatureSensor sensor = TemperatureSensor.fixed("t-1", celsius);
+
+            assertThat(sensor.readFahrenheit()).isCloseTo(expectedFahrenheit, within(1e-9));
+        }
+    }
+
+    @Nested
+    class Freezing {
+
+        @ParameterizedTest
+        @CsvSource({"0.0, true", "0.1, false", "-0.1, true", "-40, true", "25, false"})
+        void treats_zero_and_below_as_freezing(double celsius, boolean expected) {
+            assertThat(TemperatureSensor.fixed("t-1", celsius).isFreezing()).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class Calibration {
+
+        @Test
+        void reads_through_to_the_source_on_every_call() {
+            AtomicReference<Double> reading = new AtomicReference<>(20.0);
+            TemperatureSensor source = new SimulatedSensor("t-1", reading::get);
+            TemperatureSensor calibrated = source.calibrated(1.5);
+
+            assertThat(calibrated.readCelsius()).isCloseTo(21.5, within(1e-9));
+
+            reading.set(22.0);
+
+            assertThat(calibrated.readCelsius()).isCloseTo(23.5, within(1e-9));
+        }
+
+        @Test
+        void keeps_the_id_of_the_source() {
+            assertThat(TemperatureSensor.fixed("t-1", 20.0).calibrated(-2.0).id()).isEqualTo("t-1");
+        }
+
+        @Test
+        void calibrating_a_calibrated_sensor_adds_the_offsets() {
+            TemperatureSensor twice = TemperatureSensor.fixed("t-1", 20.0).calibrated(1.0).calibrated(-0.5);
+
+            assertThat(twice.readCelsius()).isCloseTo(20.5, within(1e-9));
+        }
+
+        @Test
+        void the_default_methods_see_the_calibrated_reading() {
+            TemperatureSensor sensor = TemperatureSensor.fixed("t-1", 0.5).calibrated(-1.0);
+
+            assertThat(sensor.isFreezing()).isTrue();
+            assertThat(sensor.readFahrenheit()).isCloseTo(31.1, within(1e-9));
+        }
+
+        @ParameterizedTest
+        @ValueSource(doubles = {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY})
+        void rejects_an_offset_that_is_not_finite(double offset) {
+            TemperatureSensor sensor = TemperatureSensor.fixed("t-1", 20.0);
+
+            assertThatThrownBy(() -> sensor.calibrated(offset)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Fixed {
+
+        @Test
+        void reports_the_given_value_and_id() {
+            TemperatureSensor sensor = TemperatureSensor.fixed("t-1", 21.25);
+
+            assertThat(sensor.id()).isEqualTo("t-1");
+            assertThat(sensor.readCelsius()).isEqualTo(21.25);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"", "   "})
+        void rejects_a_blank_id(String id) {
+            assertThatThrownBy(() -> TemperatureSensor.fixed(id, 20.0)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_null_id() {
+            assertThatThrownBy(() -> TemperatureSensor.fixed(null, 20.0)).isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task39/ResolutionRulesTest.java -->
+**[`ResolutionRulesTest.java`](../src/test/java/io/github/chris013/practice/task39/ResolutionRulesTest.java)**
+
+```java
+package io.github.chris013.practice.task39;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
+
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class ResolutionRulesTest {
+
+    @Nested
+    class LegacyImplementers {
+
+        @Test
+        void legacy_thermometer_gets_the_new_defaults_without_any_change() {
+            LegacyThermometer thermometer = new LegacyThermometer("t-2", -3.0);
+
+            assertThat(thermometer.readFahrenheit()).isCloseTo(26.6, within(1e-9));
+            assertThat(thermometer.isFreezing()).isTrue();
+        }
+
+        @Test
+        void legacy_thermometer_calibration_follows_its_updates() {
+            LegacyThermometer thermometer = new LegacyThermometer("t-2", 10.0);
+            TemperatureSensor calibrated = thermometer.calibrated(2.0);
+
+            thermometer.update(-5.0);
+
+            assertThat(calibrated.readCelsius()).isCloseTo(-3.0, within(1e-9));
+            assertThat(calibrated.isFreezing()).isTrue();
+        }
+    }
+
+    @Nested
+    class ClassWinsOverDefault {
+
+        @Test
+        void the_class_method_replaces_the_interface_default() {
+            // 1.1 degrees Fahrenheit round-trips to 1.1000000000000014 through the default formula,
+            // so an exact comparison proves that the class method is the one being called.
+            ImperialSensor sensor = new ImperialSensor("t-3", 1.1);
+
+            assertThat(sensor.readFahrenheit()).isEqualTo(1.1);
+        }
+
+        @Test
+        void the_class_still_converts_its_celsius_reading() {
+            ImperialSensor sensor = new ImperialSensor("t-3", 212.0);
+
+            assertThat(sensor.readCelsius()).isCloseTo(100.0, within(1e-9));
+            assertThat(sensor.isFreezing()).isFalse();
+        }
+    }
+
+    @Nested
+    class ConflictingLabels {
+
+        @Test
+        void a_room_sensor_resolves_the_label_conflict_itself() {
+            RoomSensor sensor = new RoomSensor("t-7", "Kitchen", TemperatureSensor.fixed("t-7", 19.0));
+
+            assertThat(sensor.label()).isEqualTo("Kitchen (Sensor t-7)");
+        }
+
+        @Test
+        void a_room_sensor_rejects_null_arguments() {
+            TemperatureSensor source = TemperatureSensor.fixed("t-7", 19.0);
+
+            assertThatThrownBy(() -> new RoomSensor(null, "Kitchen", source)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new RoomSensor("t-7", null, source)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new RoomSensor("t-7", "Kitchen", null)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void a_room_sensor_reads_from_its_source() {
+            RoomSensor sensor = new RoomSensor("t-7", "Kitchen", TemperatureSensor.fixed("t-7", -1.0));
+
+            assertThat(sensor.id()).isEqualTo("t-7");
+            assertThat(sensor.room()).isEqualTo("Kitchen");
+            assertThat(sensor.readCelsius()).isCloseTo(-1.0, within(1e-9));
+            assertThat(sensor.isFreezing()).isTrue();
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task39/AbstractTemperatureSensorTest.java -->
+**[`AbstractTemperatureSensorTest.java`](../src/test/java/io/github/chris013/practice/task39/AbstractTemperatureSensorTest.java)**
+
+```java
+package io.github.chris013.practice.task39;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class AbstractTemperatureSensorTest {
+
+    /** A second subclass with the same id as a {@link SimulatedSensor}: equal ids are not enough to be equal. */
+    private static final class OtherSensor extends AbstractTemperatureSensor {
+
+        OtherSensor(String id) {
+            super(id);
+        }
+
+        @Override
+        public double readCelsius() {
+            return 0.0;
+        }
+    }
+
+    @Nested
+    class Identity {
+
+        @Test
+        void two_sensors_of_the_same_class_and_id_are_equal() {
+            SimulatedSensor first = new SimulatedSensor("t-1", () -> 20.0);
+            SimulatedSensor second = new SimulatedSensor("t-1", () -> 35.0);
+
+            assertThat(first).isEqualTo(second);
+            assertThat(first.hashCode()).isEqualTo(second.hashCode());
+        }
+
+        @Test
+        void sensors_with_different_ids_are_not_equal() {
+            assertThat(new SimulatedSensor("t-1", () -> 20.0)).isNotEqualTo(new SimulatedSensor("t-2", () -> 20.0));
+        }
+
+        @Test
+        void sensors_of_different_classes_are_not_equal_even_with_the_same_id() {
+            assertThat(new SimulatedSensor("t-1", () -> 20.0)).isNotEqualTo(new OtherSensor("t-1"));
+        }
+
+        @Test
+        void a_sensor_is_not_equal_to_null_or_to_a_plain_object() {
+            SimulatedSensor sensor = new SimulatedSensor("t-1", () -> 20.0);
+
+            assertThat(sensor).isNotEqualTo(null);
+            assertThat(sensor).isNotEqualTo("t-1");
+        }
+    }
+
+    @Nested
+    class Text {
+
+        @Test
+        void to_string_shows_the_class_and_the_id() {
+            assertThat(new SimulatedSensor("t-1", () -> 20.0)).hasToString("SimulatedSensor[t-1]");
+        }
+    }
+
+    @Nested
+    class Construction {
+
+        @Test
+        void rejects_a_blank_id() {
+            assertThatThrownBy(() -> new OtherSensor(" ")).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_null_id() {
+            assertThatThrownBy(() -> new OtherSensor(null)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void keeps_the_id_it_was_given() {
+            assertThat(new OtherSensor("t-9").id()).isEqualTo("t-9");
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -240,12 +524,191 @@ Run: `mvn test -Dtest='**/task39/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task39/TemperatureSensor.java -->
+**[`TemperatureSensor.java`](../solutions/src/main/java/io/github/chris013/practice/task39/TemperatureSensor.java)**
+
+```java
+package io.github.chris013.practice.task39;
+
+import java.util.Objects;
+
+/**
+ * A temperature sensor as published by the platform team. Implementers in other teams' code only provide
+ * {@link #id()} and {@link #readCelsius()}. Everything else is a default method, so we could add it without
+ * breaking them.
+ */
+public interface TemperatureSensor {
+
+    /** Stable identifier of the sensor. */
+    String id();
+
+    /** Current temperature in degrees Celsius. May change between calls, so callers must not cache it. */
+    double readCelsius();
+
+    /** Fahrenheit is derived from Celsius unless the implementation has a native Fahrenheit reading. */
+    default double readFahrenheit() {
+        return readCelsius() * 9 / 5 + 32;
+    }
+
+    /** The boundary is inclusive: water at exactly 0.0 C counts as freezing. */
+    default boolean isFreezing() {
+        return readCelsius() <= 0.0;
+    }
+
+    /**
+     * Returns a sensor with the same id whose reading is this sensor's reading plus {@code offsetCelsius}.
+     *
+     * <p>The result reads through to this sensor on every call. A snapshot would silently stop following
+     * the hardware after the first call.
+     *
+     * @throws IllegalArgumentException if {@code offsetCelsius} is NaN or infinite
+     */
+    default TemperatureSensor calibrated(double offsetCelsius) {
+        if (!Double.isFinite(offsetCelsius)) {
+            throw new IllegalArgumentException("offsetCelsius must be finite");
+        }
+        TemperatureSensor source = this;
+        return new TemperatureSensor() {
+            @Override
+            public String id() {
+                return source.id();
+            }
+
+            @Override
+            public double readCelsius() {
+                return source.readCelsius() + offsetCelsius;
+            }
+        };
+    }
+
+    /**
+     * A sensor that always reports the same value. Useful for tests and for stubbing out hardware.
+     *
+     * @throws IllegalArgumentException if {@code id} is blank
+     */
+    static TemperatureSensor fixed(String id, double celsius) {
+        Objects.requireNonNull(id, "id");
+        if (id.isBlank()) {
+            throw new IllegalArgumentException("id must not be blank");
+        }
+        return new TemperatureSensor() {
+            @Override
+            public String id() {
+                return id;
+            }
+
+            @Override
+            public double readCelsius() {
+                return celsius;
+            }
+        };
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task39/AbstractTemperatureSensor.java -->
+**[`AbstractTemperatureSensor.java`](../solutions/src/main/java/io/github/chris013/practice/task39/AbstractTemperatureSensor.java)**
+
+```java
+package io.github.chris013.practice.task39;
+
+import java.util.Objects;
+
+/**
+ * Skeletal implementation (<i>Effective Java</i> Item 20). It takes care of the id and the identity rules, so an
+ * implementer only has to write {@link #readCelsius()}.
+ *
+ * <p>{@code equals}, {@code hashCode} and {@code toString} cannot be default methods in {@link TemperatureSensor}:
+ * the compiler rejects a default method that overrides a method of {@link Object}. They have to live in a class.
+ */
+public abstract class AbstractTemperatureSensor implements TemperatureSensor {
+
+    private final String id;
+
+    protected AbstractTemperatureSensor(String id) {
+        Objects.requireNonNull(id, "id");
+        if (id.isBlank()) {
+            throw new IllegalArgumentException("id must not be blank");
+        }
+        this.id = id;
+    }
+
+    @Override
+    public final String id() {
+        return id;
+    }
+
+    /** Two sensors are the same when they are of the same class and have the same id. */
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (other == null || getClass() != other.getClass()) {
+            return false;
+        }
+        return id.equals(((AbstractTemperatureSensor) other).id);
+    }
+
+    @Override
+    public int hashCode() {
+        return id.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return getClass().getSimpleName() + "[" + id + "]";
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task39/RoomSensor.java -->
+**[`RoomSensor.java`](../solutions/src/main/java/io/github/chris013/practice/task39/RoomSensor.java)**
+
+```java
+package io.github.chris013.practice.task39;
+
+import java.util.Objects;
+
+/**
+ * A sensor placed in a room. It implements two interfaces that both declare {@code label()}, so the class must
+ * resolve the conflict itself. Otherwise the code does not compile.
+ */
+public final class RoomSensor implements TemperatureSensor, Labelled, Located {
+
+    private final String id;
+    private final String room;
+    private final TemperatureSensor source;
+
+    public RoomSensor(String id, String room, TemperatureSensor source) {
+        this.id = Objects.requireNonNull(id, "id");
+        this.room = Objects.requireNonNull(room, "room");
+        this.source = Objects.requireNonNull(source, "source");
+    }
+
+    @Override
+    public String id() {
+        return id;
+    }
+
+    @Override
+    public String room() {
+        return room;
+    }
+
+    @Override
+    public double readCelsius() {
+        return source.readCelsius();
+    }
+
+    /** Picks the room name and the default label from {@link Labelled}, e.g. {@code Kitchen (Sensor t-7)}. */
+    @Override
+    public String label() {
+        return room + " (" + Labelled.super.label() + ")";
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

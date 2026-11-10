@@ -107,9 +107,427 @@ Run: `mvn test -Dtest='**/task36/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task36/AccessLogTest.java -->
+**[`AccessLogTest.java`](../src/test/java/io/github/chris013/practice/task36/AccessLogTest.java)**
+
+```java
+package io.github.chris013.practice.task36;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class AccessLogTest {
+
+    private static final String LOG = """
+            # shop backend access log, 2026-03-02
+            2026-03-02T14:00:02Z anna GET /api/products 200 41
+
+            2026-03-02T14:00:59Z ben POST /api/cart/items 201 120
+            2026-03-02T14:03:11Z anna GET /api/orders/42 200 87
+            2026-03-02T14:03:11Z cara GET /api/orders/7 404 15
+            2026-03-02T14:07:45Z ben GET /api/orders/42 500 1530
+            2026-03-02T14:10:00Z dan GET /api/products/9 200 640
+            2026-03-02T14:12:30Z anna POST /api/orders 503 2210
+            2026-03-02T14:14:59Z cara GET /api/products 200 38
+            2026-03-02T14:15:00Z dan GET /api/orders/42 200 95
+            2026-03-02T14:16:20Z ben GET /api/orders/99 401 12
+            2026-03-02T14:20:00Z eve GET /health 200 3
+            2026-03-02T14:20:00Z anna GET /api/orders/42 200 402
+            """;
+
+    private final AccessLog day = AccessLog.parse(LOG.lines().toList());
+
+    private static Instant at(String time) {
+        return Instant.parse("2026-03-02T" + time + "Z");
+    }
+
+    private static LogEntry entry(String time, int status) {
+        return new LogEntry(at(time), "anna", "GET", "/api/orders/42", status, 10);
+    }
+
+    @Nested
+    class Parsing {
+
+        @Test
+        void skips_blank_lines_and_comments() {
+            assertThat(day.durations().getCount()).isEqualTo(12);
+        }
+
+        @Test
+        void a_log_with_only_comments_is_empty() {
+            assertThat(AccessLog.parse(List.of("# nothing today", ""))
+                    .durations().getCount()).isZero();
+        }
+
+        @Test
+        void a_malformed_line_fails_and_the_message_names_it() {
+            List<String> lines = List.of("2026-03-02T14:00:00Z anna GET /x 200 10", "2026-03-02T14:00:01Z broken");
+
+            assertThatThrownBy(() -> AccessLog.parse(lines))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("broken");
+        }
+    }
+
+    @Nested
+    class Of {
+
+        @Test
+        void accepts_equal_times() {
+            AccessLog log = AccessLog.of(List.of(entry("14:00:00", 200), entry("14:00:00", 200)));
+
+            assertThat(log.durations().getCount()).isEqualTo(2);
+        }
+
+        @Test
+        void rejects_unsorted_entries_and_names_the_first_bad_index() {
+            List<LogEntry> unsorted = List.of(
+                    entry("14:00:00", 200),
+                    entry("14:05:00", 200),
+                    entry("14:01:00", 200),
+                    entry("14:02:00", 200));
+
+            assertThatThrownBy(() -> AccessLog.of(unsorted))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("index 2");
+        }
+
+        @Test
+        void copies_its_input() {
+            List<LogEntry> input = new ArrayList<>(List.of(entry("14:00:00", 200)));
+            AccessLog log = AccessLog.of(input);
+
+            input.clear();
+
+            assertThat(log.durations().getCount()).isEqualTo(1);
+        }
+
+        @Test
+        void rejects_null() {
+            assertThatThrownBy(() -> AccessLog.of(null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Between {
+
+        @Test
+        void includes_the_entries_at_from_and_excludes_the_entries_at_to() {
+            List<LogEntry> window = day.between(at("14:03:11"), at("14:10:00"));
+
+            assertThat(window).extracting(LogEntry::user).containsExactly("anna", "cara", "ben");
+        }
+
+        @Test
+        void includes_the_first_entry_when_from_is_its_time() {
+            assertThat(day.between(at("14:00:02"), at("14:00:03")))
+                    .singleElement()
+                    .satisfies(entry -> assertThat(entry.durationMs()).isEqualTo(41L));
+        }
+
+        @Test
+        void an_empty_range_gives_nothing() {
+            assertThat(day.between(at("14:15:00"), at("14:15:00"))).isEmpty();
+            assertThat(day.between(at("13:00:00"), at("14:00:02"))).isEmpty();
+        }
+
+        @Test
+        void a_range_ending_at_the_last_time_leaves_out_that_time() {
+            assertThat(day.between(at("14:16:20"), at("14:20:00")))
+                    .extracting(LogEntry::user)
+                    .containsExactly("ben");
+        }
+
+        @Test
+        void a_range_covering_the_tail_of_the_day_returns_the_tail() {
+            assertThat(day.between(at("14:20:00"), at("23:59:59")))
+                    .extracting(LogEntry::user)
+                    .containsExactly("eve", "anna");
+        }
+
+        @Test
+        void rejects_a_range_that_ends_before_it_starts() {
+            assertThatThrownBy(() -> day.between(at("14:10:00"), at("14:00:00")))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void returns_an_unmodifiable_list() {
+            List<LogEntry> window = day.between(at("14:00:00"), at("14:01:00"));
+
+            assertThatThrownBy(() -> window.add(entry("14:00:30", 200)))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Nested
+    class FirstServerError {
+
+        @Test
+        void returns_the_first_5xx_entry_in_time_order() {
+            assertThat(day.firstServerError()).hasValueSatisfying(entry -> {
+                assertThat(entry.time()).isEqualTo(at("14:07:45"));
+                assertThat(entry.status()).isEqualTo(500);
+            });
+        }
+
+        @Test
+        void is_empty_when_only_4xx_and_2xx_entries_exist() {
+            AccessLog log = AccessLog.of(List.of(entry("14:00:00", 404), entry("14:00:01", 200)));
+
+            assertThat(log.firstServerError()).isEmpty();
+        }
+    }
+
+    @Nested
+    class UsersAndPaths {
+
+        @Test
+        void lists_each_user_once_in_order_of_first_appearance() {
+            assertThat(day.usersSeen()).containsExactly("anna", "ben", "cara", "dan", "eve");
+        }
+
+        @Test
+        void users_list_is_unmodifiable() {
+            assertThatThrownBy(() -> day.usersSeen().add("zoe")).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void collects_every_distinct_path_segment_in_sorted_order() {
+            assertThat(day.pathSegments()).containsExactly(
+                    "42", "7", "9", "99", "api", "cart", "health", "items", "orders", "products");
+        }
+
+        @Test
+        void path_segments_are_unmodifiable() {
+            assertThatThrownBy(() -> day.pathSegments().add("x")).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void ignores_empty_segments_so_the_root_path_contributes_nothing() {
+            AccessLog log = AccessLog.of(List.of(new LogEntry(at("14:00:00"), "anna", "GET", "/", 200, 1)));
+
+            assertThat(log.pathSegments()).isEmpty();
+        }
+    }
+
+    @Nested
+    class Statistics {
+
+        @Test
+        void partitions_by_error_keeping_log_order() {
+            assertThat(day.partitionByError().get(true))
+                    .extracting(LogEntry::status)
+                    .containsExactly(404, 500, 503, 401);
+            assertThat(day.partitionByError().get(false)).hasSize(8);
+        }
+
+        @ParameterizedTest(name = "status {0} is an error: {1}")
+        @CsvSource({"399, false", "400, true", "599, true"})
+        void partitions_at_the_400_boundary(int status, boolean error) {
+            AccessLog log = AccessLog.of(List.of(entry("14:00:00", status)));
+
+            assertThat(log.partitionByError().get(error)).hasSize(1);
+            assertThat(log.partitionByError().get(!error)).isEmpty();
+        }
+
+        @Test
+        void both_partition_keys_exist_even_without_errors() {
+            AccessLog log = AccessLog.of(List.of(entry("14:00:00", 200)));
+
+            assertThat(log.partitionByError()).containsOnlyKeys(true, false);
+            assertThat(log.partitionByError().get(true)).isEmpty();
+        }
+
+        @Test
+        void partition_lists_are_unmodifiable() {
+            assertThatThrownBy(() -> day.partitionByError().get(true).add(entry("14:00:00", 500)))
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void summarises_the_durations() {
+            var stats = day.durations();
+
+            assertThat(stats.getCount()).isEqualTo(12);
+            assertThat(stats.getSum()).isEqualTo(5193L);
+            assertThat(stats.getMin()).isEqualTo(3L);
+            assertThat(stats.getMax()).isEqualTo(2210L);
+        }
+
+        @ParameterizedTest(name = "slower than {0} ms: {1} entries")
+        @CsvSource({"0, 12", "500, 3", "640, 2", "2210, 0"})
+        void counts_entries_strictly_slower_than_the_threshold(long thresholdMs, long expected) {
+            assertThat(day.countSlowerThan(Duration.ofMillis(thresholdMs))).isEqualTo(expected);
+        }
+
+        @Test
+        void an_empty_log_has_no_requests() {
+            AccessLog empty = AccessLog.of(List.of());
+
+            assertThat(empty.durations().getCount()).isZero();
+            assertThat(empty.countSlowerThan(Duration.ZERO)).isZero();
+        }
+    }
+
+    @Nested
+    class RequestsPerWindow {
+
+        @Test
+        void counts_requests_in_each_five_minute_window() {
+            assertThat(day.requestsPerWindow(at("14:00:00"), at("14:20:00"), Duration.ofMinutes(5)))
+                    .containsExactly(4L, 1L, 3L, 2L);
+        }
+
+        @Test
+        void the_last_window_counts_only_entries_before_the_end() {
+            assertThat(day.requestsPerWindow(at("14:00:00"), at("14:12:00"), Duration.ofMinutes(5)))
+                    .containsExactly(4L, 1L, 1L);
+        }
+
+        @Test
+        void an_end_on_a_window_boundary_adds_no_extra_window() {
+            assertThat(day.requestsPerWindow(at("14:00:00"), at("14:05:00"), Duration.ofMinutes(5)))
+                    .containsExactly(4L);
+        }
+
+        @Test
+        void a_window_starting_mid_hour_includes_entries_at_its_start_time() {
+            assertThat(day.requestsPerWindow(at("14:03:11"), at("14:08:00"), Duration.ofMinutes(5)))
+                    .containsExactly(3L);
+        }
+
+        @Test
+        void quiet_windows_count_as_zero() {
+            AccessLog log = AccessLog.of(List.of(entry("14:00:00", 200), entry("14:12:00", 200)));
+
+            assertThat(log.requestsPerWindow(at("14:00:00"), at("14:15:00"), Duration.ofMinutes(5)))
+                    .containsExactly(1L, 0L, 1L);
+        }
+
+        @Test
+        void equal_start_and_end_gives_no_windows() {
+            assertThat(day.requestsPerWindow(at("14:00:00"), at("14:00:00"), Duration.ofMinutes(5))).isEmpty();
+        }
+
+        @Test
+        void an_empty_log_gives_zero_per_window() {
+            assertThat(AccessLog.of(List.of()).requestsPerWindow(at("14:00:00"), at("14:10:00"), Duration.ofMinutes(5)))
+                    .containsExactly(0L, 0L);
+        }
+
+        @Test
+        void rejects_a_start_after_the_end() {
+            assertThatThrownBy(() -> day.requestsPerWindow(at("14:10:00"), at("14:00:00"), Duration.ofMinutes(5)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"PT0S", "PT-1S"})
+        void rejects_a_window_that_is_not_positive(String window) {
+            assertThatThrownBy(() -> day.requestsPerWindow(at("14:00:00"), at("14:10:00"), Duration.parse(window)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task36/LogEntryTest.java -->
+**[`LogEntryTest.java`](../src/test/java/io/github/chris013/practice/task36/LogEntryTest.java)**
+
+```java
+package io.github.chris013.practice.task36;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Instant;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class LogEntryTest {
+
+    @Test
+    void parses_a_well_formed_line() {
+        LogEntry entry = LogEntry.parse("2026-03-02T14:03:11Z anna GET /api/orders/42 200 87");
+
+        assertThat(entry.time()).isEqualTo(Instant.parse("2026-03-02T14:03:11Z"));
+        assertThat(entry.user()).isEqualTo("anna");
+        assertThat(entry.method()).isEqualTo("GET");
+        assertThat(entry.path()).isEqualTo("/api/orders/42");
+        assertThat(entry.status()).isEqualTo(200);
+        assertThat(entry.durationMs()).isEqualTo(87L);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+        "too few fields | 2026-03-02T14:03:11Z anna GET /api/orders/42 200",
+        "double space | 2026-03-02T14:03:11Z  anna GET /api/orders/42 200 87",
+        "bad time | yesterday anna GET /api/orders/42 200 87",
+        "bad status | 2026-03-02T14:03:11Z anna GET /api/orders/42 OK 87",
+        "status 600 | 2026-03-02T14:03:11Z anna GET /api/orders/42 600 87",
+        "negative duration | 2026-03-02T14:03:11Z anna GET /api/orders/42 200 -1",
+        "path without slash | 2026-03-02T14:03:11Z anna GET api/orders/42 200 87"
+    })
+    void rejects_a_malformed_line_and_names_the_line(String caseName, String line) {
+        assertThatThrownBy(() -> LogEntry.parse(line))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(line);
+    }
+
+    @Nested
+    class Construction {
+
+        @Test
+        void accepts_the_edges_of_the_status_range_and_a_zero_duration() {
+            Instant time = Instant.parse("2026-03-02T14:03:11Z");
+
+            assertThatCode(() -> new LogEntry(time, "anna", "GET", "/", 100, 0)).doesNotThrowAnyException();
+            assertThatCode(() -> new LogEntry(time, "anna", "GET", "/", 599, 0)).doesNotThrowAnyException();
+        }
+
+        @Test
+        void rejects_null_fields() {
+            assertThatThrownBy(() -> new LogEntry(null, "anna", "GET", "/", 200, 1))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new LogEntry(Instant.EPOCH, null, "GET", "/", 200, 1))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Classification {
+
+        @ParameterizedTest
+        @CsvSource({"399, false", "400, false", "499, false", "500, true", "599, true"})
+        void server_errors_are_500_to_599(int status, boolean expected) {
+            assertThat(entryWithStatus(status).isServerError()).isEqualTo(expected);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"399, false", "400, true", "499, true", "500, false"})
+        void client_errors_are_400_to_499(int status, boolean expected) {
+            assertThat(entryWithStatus(status).isClientError()).isEqualTo(expected);
+        }
+
+        private static LogEntry entryWithStatus(int status) {
+            return new LogEntry(Instant.parse("2026-03-02T14:03:11Z"), "anna", "GET", "/", status, 1);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -157,9 +575,241 @@ Run: `mvn test -Dtest='**/task36/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task36/AccessLog.java -->
+**[`AccessLog.java`](../solutions/src/main/java/io/github/chris013/practice/task36/AccessLog.java)**
+
+```java
+package io.github.chris013.practice.task36;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.LongSummaryStatistics;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.SortedSet;
+import java.util.TreeSet;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
+
+/**
+ * One day's access log, sorted by time, and the questions the ops team asks of it.
+ *
+ * <p>The log is immutable. Every query returns a new value and changes nothing.
+ */
+public final class AccessLog {
+
+    private final List<LogEntry> entries;
+
+    private AccessLog(List<LogEntry> entries) {
+        this.entries = entries;
+    }
+
+    /**
+     * Copies the entries. Equal times are allowed, but the list must be sorted by time.
+     *
+     * @throws IllegalArgumentException if an entry is earlier than the one before it; the message names its index
+     */
+    public static AccessLog of(List<LogEntry> entries) {
+        List<LogEntry> copy = List.copyOf(Objects.requireNonNull(entries, "entries"));
+        // Sortedness is checked once, here. Every query after this relies on it, so the check cannot be skipped.
+        OptionalInt firstOutOfOrder = IntStream.range(1, copy.size())
+                .filter(i -> copy.get(i).time().isBefore(copy.get(i - 1).time()))
+                .findFirst();
+        if (firstOutOfOrder.isPresent()) {
+            throw new IllegalArgumentException(
+                    "entries must be sorted by time, but the entry at index %d is earlier than the one before it"
+                            .formatted(firstOutOfOrder.getAsInt()));
+        }
+        return new AccessLog(copy);
+    }
+
+    /** Parses the lines. Blank lines and lines that start with {@code #} are skipped. */
+    public static AccessLog parse(List<String> lines) {
+        Objects.requireNonNull(lines, "lines");
+        List<LogEntry> entries = lines.stream()
+                .filter(line -> !line.isBlank() && !line.startsWith("#"))
+                .map(LogEntry::parse)
+                .toList();
+        return of(entries);
+    }
+
+    /**
+     * Entries with {@code fromInclusive <= time < toExclusive}, in log order.
+     *
+     * <p>{@code dropWhile} and {@code takeWhile} are only correct because the log is sorted. {@code dropWhile}
+     * skips the early entries. {@code takeWhile} stops at the first entry at or after {@code toExclusive}, so the
+     * rest of the day is never looked at. A {@code filter} would examine every entry.
+     *
+     * @throws IllegalArgumentException if {@code fromInclusive} is after {@code toExclusive}
+     */
+    public List<LogEntry> between(Instant fromInclusive, Instant toExclusive) {
+        Objects.requireNonNull(fromInclusive, "fromInclusive");
+        Objects.requireNonNull(toExclusive, "toExclusive");
+        if (fromInclusive.isAfter(toExclusive)) {
+            throw new IllegalArgumentException("from %s is after to %s".formatted(fromInclusive, toExclusive));
+        }
+        return entries.stream()
+                .dropWhile(entry -> entry.time().isBefore(fromInclusive))
+                .takeWhile(entry -> entry.time().isBefore(toExclusive))
+                .toList();
+    }
+
+    /** The first entry with a 5xx status, if there is one. */
+    public Optional<LogEntry> firstServerError() {
+        return entries.stream()
+                .filter(LogEntry::isServerError)
+                .findFirst();
+    }
+
+    /** Distinct user names, in the order they first appear. {@code distinct} keeps the first occurrence. */
+    public List<String> usersSeen() {
+        return entries.stream()
+                .map(LogEntry::user)
+                .distinct()
+                .toList();
+    }
+
+    /**
+     * Every distinct non-empty segment of every path, sorted. {@code flatMap} turns each path into a stream of
+     * segments and merges them into one stream. A plain {@code map} would give a stream of arrays.
+     */
+    public SortedSet<String> pathSegments() {
+        SortedSet<String> segments = entries.stream()
+                .map(LogEntry::path)
+                .flatMap(path -> Arrays.stream(path.split("/")))
+                .filter(segment -> !segment.isEmpty())
+                .collect(Collectors.toCollection(TreeSet::new));
+        return Collections.unmodifiableSortedSet(segments);
+    }
+
+    /**
+     * Splits the entries by error. {@code partitioningBy} always gives both keys, even when one side is empty.
+     * {@code toUnmodifiableList} makes the two lists immutable.
+     */
+    public Map<Boolean, List<LogEntry>> partitionByError() {
+        return entries.stream()
+                .collect(Collectors.partitioningBy(
+                        entry -> entry.isClientError() || entry.isServerError(),
+                        Collectors.toUnmodifiableList()));
+    }
+
+    /**
+     * Count, sum, min, max and average of the durations. {@code mapToLong} keeps the values primitive, so nothing
+     * is boxed. For an empty log, count is 0 and min and max carry the usual {@code LongSummaryStatistics} defaults.
+     */
+    public LongSummaryStatistics durations() {
+        return entries.stream()
+                .mapToLong(LogEntry::durationMs)
+                .summaryStatistics();
+    }
+
+    /** How many entries took strictly longer than {@code threshold}, compared in whole milliseconds. */
+    public long countSlowerThan(Duration threshold) {
+        Objects.requireNonNull(threshold, "threshold");
+        long thresholdMs = threshold.toMillis();
+        return entries.stream()
+                .mapToLong(LogEntry::durationMs)
+                .filter(durationMs -> durationMs > thresholdMs)
+                .count();
+    }
+
+    /**
+     * Counts entries per window {@code [start + i*window, start + (i+1)*window)} for every window that starts
+     * before {@code end}. {@code Stream.iterate} with a predicate stops at {@code end}, so no empty trailing window
+     * is produced. Each window reuses {@link #between}, which also keeps the early-stopping behaviour.
+     *
+     * @throws IllegalArgumentException if {@code window} is not positive or {@code start} is after {@code end}
+     */
+    public List<Long> requestsPerWindow(Instant start, Instant end, Duration window) {
+        Objects.requireNonNull(start, "start");
+        Objects.requireNonNull(end, "end");
+        Objects.requireNonNull(window, "window");
+        if (!window.isPositive()) {
+            throw new IllegalArgumentException("window must be positive, was " + window);
+        }
+        if (start.isAfter(end)) {
+            throw new IllegalArgumentException("start %s is after end %s".formatted(start, end));
+        }
+        return Stream.iterate(start, windowStart -> windowStart.isBefore(end), windowStart -> windowStart.plus(window))
+                .map(windowStart -> (long) between(windowStart, earlier(windowStart.plus(window), end)).size())
+                .toList();
+    }
+
+    private static Instant earlier(Instant a, Instant b) {
+        return a.isBefore(b) ? a : b;
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task36/LogEntry.java -->
+**[`LogEntry.java`](../solutions/src/main/java/io/github/chris013/practice/task36/LogEntry.java)**
+
+```java
+package io.github.chris013.practice.task36;
+
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
+import java.util.Objects;
+
+/**
+ * One request in the shop backend's access log.
+ *
+ * <p>Lines look like {@code 2026-03-02T14:03:11Z anna GET /api/orders/42 200 87}: time, user, method, path,
+ * HTTP status and duration in milliseconds, separated by single spaces.
+ */
+public record LogEntry(Instant time, String user, String method, String path, int status, long durationMs) {
+
+    public LogEntry {
+        Objects.requireNonNull(time, "time");
+        Objects.requireNonNull(user, "user");
+        Objects.requireNonNull(method, "method");
+        Objects.requireNonNull(path, "path");
+        if (!path.startsWith("/")) {
+            throw new IllegalArgumentException("path must start with '/', was " + path);
+        }
+        if (status < 100 || status > 599) {
+            throw new IllegalArgumentException("status must be between 100 and 599, was " + status);
+        }
+        if (durationMs < 0) {
+            throw new IllegalArgumentException("durationMs must not be negative, was " + durationMs);
+        }
+    }
+
+    /** Parses one log line. Any malformed line is rejected, and the message contains the line. */
+    public static LogEntry parse(String line) {
+        Objects.requireNonNull(line, "line");
+        String[] fields = line.split(" ", -1);
+        if (fields.length != 6) {
+            throw new IllegalArgumentException("expected 6 fields in log line: " + line);
+        }
+        try {
+            return new LogEntry(
+                    Instant.parse(fields[0]),
+                    fields[1],
+                    fields[2],
+                    fields[3],
+                    Integer.parseInt(fields[4]),
+                    Long.parseLong(fields[5]));
+        } catch (DateTimeParseException | IllegalArgumentException e) {
+            throw new IllegalArgumentException("malformed log line: " + line, e);
+        }
+    }
+
+    public boolean isServerError() {
+        return status >= 500;
+    }
+
+    public boolean isClientError() {
+        return status >= 400 && status < 500;
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

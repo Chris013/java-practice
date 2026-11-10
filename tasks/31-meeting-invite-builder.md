@@ -156,6 +156,444 @@ The tests are in [`MeetingInviteTest`](../src/test/java/io/github/chris013/pract
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task31/MeetingInviteTest.java -->
+**[`MeetingInviteTest.java`](../src/test/java/io/github/chris013/practice/task31/MeetingInviteTest.java)**
+
+```java
+package io.github.chris013.practice.task31;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.IntStream;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class MeetingInviteTest {
+
+    private static final String ORGANIZER = "anna@x.de";
+    private static final String TITLE = "Planning";
+    private static final Instant START = Instant.parse("2026-03-02T09:00:00Z");
+    private static final Duration THIRTY_MINUTES = Duration.ofMinutes(30);
+
+    private static MeetingInvite.Builder validBuilder() {
+        return MeetingInvite.builder(ORGANIZER, TITLE, START, THIRTY_MINUTES);
+    }
+
+    private static MeetingInvite validInvite() {
+        return validBuilder().build();
+    }
+
+    private static MeetingInvite fullInvite() {
+        return validBuilder()
+                .attendee("bob@x.de")
+                .attendee("carla@x.de")
+                .location("Room 4")
+                .description("Q3 numbers")
+                .reminderBefore(Duration.ofMinutes(10))
+                .build();
+    }
+
+    private static List<String> guests(int count) {
+        return IntStream.rangeClosed(1, count).mapToObj(i -> "guest" + i + "@x.de").toList();
+    }
+
+    @Nested
+    class Defaults {
+
+        @Test
+        void an_invite_needs_only_the_required_values() {
+            MeetingInvite invite = validInvite();
+
+            assertThat(invite.organizer()).isEqualTo(ORGANIZER);
+            assertThat(invite.title()).isEqualTo(TITLE);
+            assertThat(invite.start()).isEqualTo(START);
+            assertThat(invite.duration()).isEqualTo(THIRTY_MINUTES);
+            assertThat(invite.end()).isEqualTo(Instant.parse("2026-03-02T09:30:00Z"));
+            assertThat(invite.attendees()).isEmpty();
+            assertThat(invite.location()).isEmpty();
+            assertThat(invite.description()).isEmpty();
+            assertThat(invite.reminderBefore()).isEqualTo(Duration.ofMinutes(15));
+        }
+
+        @Test
+        void the_location_is_trimmed() {
+            assertThat(validBuilder().location("  Room 4 ").build().location()).contains("Room 4");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"", "   "})
+        void a_blank_location_means_no_location(String location) {
+            assertThat(validBuilder().location(location).build().location()).isEmpty();
+        }
+
+        @Test
+        void the_description_is_kept_as_given() {
+            assertThat(validBuilder().description("Bring the Q3 numbers").build().description())
+                    .isEqualTo("Bring the Q3 numbers");
+        }
+    }
+
+    @Nested
+    class Required {
+
+        @Test
+        void the_organizer_must_not_be_null() {
+            assertThatNullPointerException()
+                    .isThrownBy(() -> MeetingInvite.builder(null, TITLE, START, THIRTY_MINUTES))
+                    .withMessage("organizer");
+        }
+
+        @Test
+        void the_title_must_not_be_null() {
+            assertThatNullPointerException()
+                    .isThrownBy(() -> MeetingInvite.builder(ORGANIZER, null, START, THIRTY_MINUTES))
+                    .withMessage("title");
+        }
+
+        @Test
+        void the_start_must_not_be_null() {
+            assertThatNullPointerException()
+                    .isThrownBy(() -> MeetingInvite.builder(ORGANIZER, TITLE, null, THIRTY_MINUTES))
+                    .withMessage("start");
+        }
+
+        @Test
+        void the_duration_must_not_be_null() {
+            assertThatNullPointerException()
+                    .isThrownBy(() -> MeetingInvite.builder(ORGANIZER, TITLE, START, null))
+                    .withMessage("duration");
+        }
+
+        @Test
+        void a_setter_rejects_null_at_the_line_that_passes_it() {
+            MeetingInvite.Builder builder = validBuilder();
+
+            assertThatNullPointerException().isThrownBy(() -> builder.start(null)).withMessage("start");
+            assertThatNullPointerException().isThrownBy(() -> builder.duration(null)).withMessage("duration");
+            assertThatNullPointerException().isThrownBy(() -> builder.title(null)).withMessage("title");
+            assertThatNullPointerException().isThrownBy(() -> builder.attendee(null)).withMessage("email");
+            assertThatNullPointerException().isThrownBy(() -> builder.location(null)).withMessage("location");
+            assertThatNullPointerException().isThrownBy(() -> builder.description(null)).withMessage("description");
+            assertThatNullPointerException()
+                    .isThrownBy(() -> builder.reminderBefore(null))
+                    .withMessage("reminderBefore");
+        }
+
+        @Test
+        void the_attendee_collection_and_its_elements_must_not_be_null() {
+            MeetingInvite.Builder builder = validBuilder();
+
+            assertThatNullPointerException().isThrownBy(() -> builder.attendees(null)).withMessage("emails");
+            assertThatNullPointerException()
+                    .isThrownBy(() -> builder.attendees(Arrays.asList("bob@x.de", null)))
+                    .withMessage("email");
+            assertThat(builder.build().attendees()).isEmpty();
+        }
+
+        @Test
+        void trims_and_lower_cases_the_organizer() {
+            MeetingInvite invite = MeetingInvite.builder("  Anna@X.DE ", TITLE, START, THIRTY_MINUTES).build();
+
+            assertThat(invite.organizer()).isEqualTo("anna@x.de");
+        }
+    }
+
+    @Nested
+    class Validation {
+
+        @ParameterizedTest
+        @ValueSource(strings = {"PT4M", "PT8H1M", "PT0S", "PT-1M"})
+        void rejects_durations_outside_5_minutes_to_8_hours(Duration duration) {
+            assertThatThrownBy(() -> validBuilder().duration(duration).build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("duration");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"PT5M", "PT8H"})
+        void accepts_durations_at_the_limits(Duration duration) {
+            assertThat(validBuilder().duration(duration).build().duration()).isEqualTo(duration);
+        }
+
+        @Test
+        void accepts_a_title_of_exactly_100_characters() {
+            String title = "x".repeat(100);
+
+            assertThat(validBuilder().title(title).build().title()).isEqualTo(title);
+        }
+
+        @Test
+        void rejects_a_title_of_101_characters() {
+            assertThatThrownBy(() -> validBuilder().title("x".repeat(101)).build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("title");
+        }
+
+        @Test
+        void measures_the_title_after_trimming_it() {
+            String title = "x".repeat(100);
+
+            assertThat(validBuilder().title("  " + title + "  ").build().title()).isEqualTo(title);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"", "   "})
+        void rejects_a_blank_title(String title) {
+            assertThatThrownBy(() -> validBuilder().title(title).build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("title");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"PT-1M", "PT24H1M"})
+        void rejects_reminders_outside_0_to_24_hours(Duration reminder) {
+            assertThatThrownBy(() -> validBuilder().reminderBefore(reminder).build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("reminder");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"PT0S", "PT24H"})
+        void accepts_reminders_at_the_limits(Duration reminder) {
+            assertThat(validBuilder().reminderBefore(reminder).build().reminderBefore()).isEqualTo(reminder);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"anna", "@x.de", "anna@", "a@b@c", "   "})
+        void rejects_an_organizer_that_is_not_an_email_address(String email) {
+            assertThatThrownBy(() -> MeetingInvite.builder(email, TITLE, START, THIRTY_MINUTES).build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("email");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"anna", "@x.de", "anna@", "a@b@c", "   "})
+        void rejects_an_attendee_that_is_not_an_email_address(String email) {
+            assertThatThrownBy(() -> validBuilder().attendee(email).build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("email");
+        }
+
+        @Test
+        void the_bad_email_appears_in_the_message() {
+            assertThatThrownBy(() -> validBuilder().attendee("@x.de").build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("@x.de");
+        }
+    }
+
+    @Nested
+    class Attendees {
+
+        @Test
+        void trims_and_lower_cases_every_address() {
+            assertThat(validBuilder().attendee("  Bob@X.DE ").build().attendees()).containsExactly("bob@x.de");
+        }
+
+        @Test
+        void drops_duplicates_after_normalization_and_keeps_the_first_position() {
+            MeetingInvite invite = validBuilder()
+                    .attendee("bob@x.de")
+                    .attendee("carla@x.de")
+                    .attendee(" BOB@x.de ")
+                    .build();
+
+            assertThat(invite.attendees()).containsExactly("bob@x.de", "carla@x.de");
+        }
+
+        @Test
+        void keeps_the_insertion_order_of_single_and_bulk_additions() {
+            MeetingInvite invite = validBuilder()
+                    .attendee("carla@x.de")
+                    .attendees(List.of("bob@x.de", "dora@x.de"))
+                    .attendee("ed@x.de")
+                    .build();
+
+            assertThat(invite.attendees()).containsExactly("carla@x.de", "bob@x.de", "dora@x.de", "ed@x.de");
+        }
+
+        @Test
+        void rejects_the_organizer_as_an_attendee_ignoring_case_and_spaces() {
+            assertThatThrownBy(() -> validBuilder().attendee(" ANNA@x.de ").build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("organizer");
+        }
+
+        @Test
+        void accepts_fifty_attendees() {
+            assertThat(validBuilder().attendees(guests(50)).build().attendees()).hasSize(50);
+        }
+
+        @Test
+        void rejects_fifty_one_attendees() {
+            assertThatThrownBy(() -> validBuilder().attendees(guests(51)).build())
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("attendees");
+        }
+
+        @Test
+        void the_limit_counts_distinct_attendees_only() {
+            List<String> withRepeats = new ArrayList<>(guests(50));
+            withRepeats.add("GUEST1@x.de");
+            withRepeats.add("guest2@x.de");
+
+            assertThat(validBuilder().attendees(withRepeats).build().attendees()).hasSize(50);
+        }
+    }
+
+    @Nested
+    class Immutability {
+
+        @Test
+        void the_attendee_list_cannot_be_changed() {
+            List<String> attendees = validBuilder().attendee("bob@x.de").build().attendees();
+
+            assertThatThrownBy(() -> attendees.add("eve@x.de")).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void changing_the_builder_after_build_does_not_change_the_invite() {
+            MeetingInvite.Builder builder = validBuilder().attendee("bob@x.de");
+            MeetingInvite invite = builder.build();
+
+            builder.attendee("carla@x.de").title("Other").location("Room 9");
+
+            assertThat(invite.attendees()).containsExactly("bob@x.de");
+            assertThat(invite.title()).isEqualTo(TITLE);
+            assertThat(invite.location()).isEmpty();
+        }
+
+        @Test
+        void building_twice_gives_equal_but_independent_invites() {
+            MeetingInvite.Builder builder = validBuilder().attendee("bob@x.de");
+            MeetingInvite first = builder.build();
+
+            MeetingInvite second = builder.build();
+            builder.attendee("carla@x.de");
+
+            assertThat(second).isEqualTo(first).isNotSameAs(first);
+            assertThat(first.attendees()).containsExactly("bob@x.de");
+            assertThat(second.attendees()).containsExactly("bob@x.de");
+        }
+    }
+
+    @Nested
+    class ToBuilder {
+
+        @Test
+        void a_round_trip_gives_an_equal_invite() {
+            MeetingInvite invite = fullInvite();
+
+            MeetingInvite copy = invite.toBuilder().build();
+
+            assertThat(copy).isEqualTo(invite).isNotSameAs(invite);
+        }
+
+        @Test
+        void rescheduling_changes_only_the_start_and_the_end() {
+            MeetingInvite invite = fullInvite();
+            Instant tomorrow = START.plus(Duration.ofDays(1));
+
+            MeetingInvite moved = invite.toBuilder().start(tomorrow).build();
+
+            assertThat(moved.start()).isEqualTo(tomorrow);
+            assertThat(moved.end()).isEqualTo(tomorrow.plus(THIRTY_MINUTES));
+            assertThat(moved.organizer()).isEqualTo(invite.organizer());
+            assertThat(moved.title()).isEqualTo(invite.title());
+            assertThat(moved.duration()).isEqualTo(invite.duration());
+            assertThat(moved.attendees()).isEqualTo(invite.attendees());
+            assertThat(moved.location()).isEqualTo(invite.location());
+            assertThat(moved.description()).isEqualTo(invite.description());
+            assertThat(moved.reminderBefore()).isEqualTo(invite.reminderBefore());
+        }
+
+        @Test
+        void the_copied_builder_does_not_change_the_original_invite() {
+            MeetingInvite invite = fullInvite();
+
+            invite.toBuilder().attendee("dora@x.de").build();
+
+            assertThat(invite.attendees()).containsExactly("bob@x.de", "carla@x.de");
+        }
+    }
+
+    @Nested
+    class Equality {
+
+        @Test
+        void invites_with_the_same_values_are_equal_and_have_the_same_hash_code() {
+            MeetingInvite first = fullInvite();
+            MeetingInvite second = fullInvite();
+
+            assertThat(second).isEqualTo(first);
+            assertThat(second).hasSameHashCodeAs(first);
+        }
+
+        @Test
+        void a_different_description_makes_the_invites_different() {
+            MeetingInvite plain = validInvite();
+            MeetingInvite described = validBuilder().description("Bring coffee").build();
+
+            assertThat(described).isNotEqualTo(plain);
+        }
+
+        @Test
+        void to_string_summarises_the_invite() {
+            MeetingInvite invite = validBuilder().attendee("bob@x.de").attendee("carla@x.de").build();
+
+            assertThat(invite).hasToString("MeetingInvite[Planning, 2026-03-02T09:00:00Z, 30 min, 2 attendees]");
+        }
+    }
+
+    @Nested
+    class SetterOrder {
+
+        @Test
+        void a_value_can_be_corrected_by_a_later_setter() {
+            MeetingInvite invite = validBuilder().duration(Duration.ofMinutes(2)).duration(THIRTY_MINUTES).build();
+
+            assertThat(invite.duration()).isEqualTo(THIRTY_MINUTES);
+        }
+
+        @Test
+        void the_order_of_the_setters_does_not_change_the_invite() {
+            MeetingInvite first = validBuilder()
+                    .location("Room 4")
+                    .reminderBefore(Duration.ofMinutes(10))
+                    .attendee("bob@x.de")
+                    .description("Q3 numbers")
+                    .build();
+            MeetingInvite second = validBuilder()
+                    .attendee("bob@x.de")
+                    .description("Q3 numbers")
+                    .reminderBefore(Duration.ofMinutes(10))
+                    .location("Room 4")
+                    .build();
+
+            assertThat(second).isEqualTo(first);
+        }
+
+        @Test
+        void a_cross_field_rule_is_checked_by_build_not_by_the_setter() {
+            MeetingInvite.Builder builder = validBuilder();
+
+            builder.attendee(ORGANIZER);
+
+            assertThatThrownBy(builder::build)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("organizer");
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -218,6 +656,295 @@ A record with nine components still has a canonical constructor with nine positi
 #### The invite and its builder
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task31/MeetingInvite.java -->
+**[`MeetingInvite.java`](../solutions/src/main/java/io/github/chris013/practice/task31/MeetingInvite.java)**
+
+```java
+package io.github.chris013.practice.task31;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * A meeting invitation. Once it exists, it is valid and it never changes.
+ *
+ * <p>Create one with {@link #builder(String, String, Instant, Duration)}. To reschedule an existing invite,
+ * use {@link #toBuilder()}. The rules that involve several fields are checked in {@link Builder#build()},
+ * so the order of the setter calls never matters.
+ */
+public final class MeetingInvite {
+
+    private static final Duration MIN_DURATION = Duration.ofMinutes(5);
+    private static final Duration MAX_DURATION = Duration.ofHours(8);
+    private static final Duration DEFAULT_REMINDER = Duration.ofMinutes(15);
+    private static final Duration MAX_REMINDER = Duration.ofHours(24);
+    private static final int MAX_TITLE_LENGTH = 100;
+    private static final int MAX_ATTENDEES = 50;
+
+    private final String organizer;
+    private final String title;
+    private final Instant start;
+    private final Duration duration;
+    private final List<String> attendees;
+    private final String location; // null means "no location"; exposed as Optional
+    private final String description;
+    private final Duration reminderBefore;
+
+    /**
+     * Only reachable through {@link Builder#build()}. All checks run here, on the builder's
+     * values. The attendee list is copied, so later changes to the builder cannot reach this invite.
+     */
+    private MeetingInvite(Builder builder) {
+        this.organizer = normalizeEmail(builder.organizer);
+        this.title = validTitle(builder.title);
+        this.start = builder.start;
+        this.duration = validDuration(builder.duration);
+        this.attendees = normalizeAttendees(organizer, builder.attendees);
+        this.location = normalizeLocation(builder.location);
+        this.description = builder.description;
+        this.reminderBefore = validReminder(builder.reminderBefore);
+    }
+
+    /**
+     * Required values are parameters, so a caller cannot forget them. Optional values are setters
+     * because a long parameter list is where swapped arguments come from.
+     */
+    public static Builder builder(String organizer, String title, Instant start, Duration duration) {
+        return new Builder(organizer, title, start, duration);
+    }
+
+    public String organizer() {
+        return organizer;
+    }
+
+    public String title() {
+        return title;
+    }
+
+    public Instant start() {
+        return start;
+    }
+
+    public Duration duration() {
+        return duration;
+    }
+
+    /** {@code start() + duration()}. Derived, so it is never stored and can never disagree with the others. */
+    public Instant end() {
+        return start.plus(duration);
+    }
+
+    public List<String> attendees() {
+        return attendees;
+    }
+
+    public Optional<String> location() {
+        return Optional.ofNullable(location);
+    }
+
+    public String description() {
+        return description;
+    }
+
+    public Duration reminderBefore() {
+        return reminderBefore;
+    }
+
+    public Builder toBuilder() {
+        Builder copy = new Builder(organizer, title, start, duration);
+        copy.attendees.addAll(attendees);
+        copy.location = location;
+        copy.description = description;
+        copy.reminderBefore = reminderBefore;
+        return copy;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof MeetingInvite that)) {
+            return false;
+        }
+        return organizer.equals(that.organizer)
+                && title.equals(that.title)
+                && start.equals(that.start)
+                && duration.equals(that.duration)
+                && attendees.equals(that.attendees)
+                && Objects.equals(location, that.location)
+                && description.equals(that.description)
+                && reminderBefore.equals(that.reminderBefore);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(organizer, title, start, duration, attendees, location, description, reminderBefore);
+    }
+
+    @Override
+    public String toString() {
+        return "MeetingInvite[%s, %s, %d min, %d attendees]"
+                .formatted(title, start, duration.toMinutes(), attendees.size());
+    }
+
+    private static String validTitle(String raw) {
+        String title = raw.strip();
+        if (title.isEmpty()) {
+            throw new IllegalArgumentException("title must not be blank");
+        }
+        if (title.length() > MAX_TITLE_LENGTH) {
+            throw new IllegalArgumentException(
+                    "title must be at most %d characters, was %d".formatted(MAX_TITLE_LENGTH, title.length()));
+        }
+        return title;
+    }
+
+    private static Duration validDuration(Duration duration) {
+        if (duration.compareTo(MIN_DURATION) < 0 || duration.compareTo(MAX_DURATION) > 0) {
+            throw new IllegalArgumentException(
+                    "duration must be between %s and %s, was %s".formatted(MIN_DURATION, MAX_DURATION, duration));
+        }
+        return duration;
+    }
+
+    private static Duration validReminder(Duration reminder) {
+        if (reminder.isNegative() || reminder.compareTo(MAX_REMINDER) > 0) {
+            throw new IllegalArgumentException(
+                    "reminder must be between 0 and %s, was %s".formatted(MAX_REMINDER, reminder));
+        }
+        return reminder;
+    }
+
+    /**
+     * Trims and lower-cases the address, then checks that it has exactly one {@code @} with text on
+     * both sides. This is not full RFC 5322 validation, it only catches the typos that happen in practice.
+     * We normalize before comparing, so {@code Bob@X.de} and {@code bob@x.de} are the same person.
+     */
+    private static String normalizeEmail(String raw) {
+        String email = raw.strip().toLowerCase(Locale.ROOT);
+        int at = email.indexOf('@');
+        boolean valid = at > 0 && at < email.length() - 1 && email.indexOf('@', at + 1) < 0;
+        if (!valid) {
+            throw new IllegalArgumentException("email is not an address: '" + raw + "'");
+        }
+        return email;
+    }
+
+    /**
+     * Normalizes and de-duplicates before counting, so the 50-attendee limit applies to people and
+     * not to typed-in duplicates. A {@link LinkedHashSet} keeps the first position of each address.
+     */
+    private static List<String> normalizeAttendees(String organizer, List<String> raw) {
+        Set<String> distinct = new LinkedHashSet<>();
+        for (String email : raw) {
+            distinct.add(normalizeEmail(email));
+        }
+        if (distinct.contains(organizer)) {
+            throw new IllegalArgumentException("organizer " + organizer + " cannot also be an attendee");
+        }
+        if (distinct.size() > MAX_ATTENDEES) {
+            throw new IllegalArgumentException(
+                    "attendees must be at most %d after removing duplicates, was %d"
+                            .formatted(MAX_ATTENDEES, distinct.size()));
+        }
+        // List.copyOf makes an unmodifiable copy, so no one can reach the set we just built.
+        return List.copyOf(distinct);
+    }
+
+    /** A blank location means "no location". Nothing is ever stored as an empty string. */
+    private static String normalizeLocation(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String location = raw.strip();
+        return location.isEmpty() ? null : location;
+    }
+
+    /**
+     * The mutable state of an invite under construction. Every setter validates only its own
+     * argument (null). The rules that need several fields are checked in {@link #build()}.
+     */
+    public static final class Builder {
+
+        private final String organizer;
+        private String title;
+        private Instant start;
+        private Duration duration;
+        private final List<String> attendees = new ArrayList<>(); // raw, not yet normalized
+        private String location;
+        private String description = "";
+        private Duration reminderBefore = DEFAULT_REMINDER;
+
+        /**
+         * Null checks run now, on the line that passes the wrong value, not later in {@link #build()}.
+         */
+        private Builder(String organizer, String title, Instant start, Duration duration) {
+            this.organizer = Objects.requireNonNull(organizer, "organizer");
+            this.title = Objects.requireNonNull(title, "title");
+            this.start = Objects.requireNonNull(start, "start");
+            this.duration = Objects.requireNonNull(duration, "duration");
+        }
+
+        public Builder start(Instant start) {
+            this.start = Objects.requireNonNull(start, "start");
+            return this;
+        }
+
+        public Builder duration(Duration duration) {
+            this.duration = Objects.requireNonNull(duration, "duration");
+            return this;
+        }
+
+        public Builder title(String title) {
+            this.title = Objects.requireNonNull(title, "title");
+            return this;
+        }
+
+        public Builder attendee(String email) {
+            attendees.add(Objects.requireNonNull(email, "email"));
+            return this;
+        }
+
+        public Builder attendees(Collection<String> emails) {
+            List<String> checked = new ArrayList<>(Objects.requireNonNull(emails, "emails"));
+            checked.forEach(email -> Objects.requireNonNull(email, "email"));
+            attendees.addAll(checked); // all or nothing: a null element leaves the builder unchanged
+            return this;
+        }
+
+        public Builder location(String location) {
+            this.location = Objects.requireNonNull(location, "location");
+            return this;
+        }
+
+        public Builder description(String description) {
+            this.description = Objects.requireNonNull(description, "description");
+            return this;
+        }
+
+        public Builder reminderBefore(Duration reminderBefore) {
+            this.reminderBefore = Objects.requireNonNull(reminderBefore, "reminderBefore");
+            return this;
+        }
+
+        /**
+         * Returns a new, independent invite each time. The builder is not modified, so it can
+         * be used again.
+         */
+        public MeetingInvite build() {
+            return new MeetingInvite(this);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

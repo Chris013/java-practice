@@ -214,9 +214,275 @@ The characterization tests are in [`CouponServiceTest`](../src/test/java/io/gith
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task40/CouponServiceTest.java -->
+**[`CouponServiceTest.java`](../src/test/java/io/github/chris013/practice/task40/CouponServiceTest.java)**
+
+```java
+package io.github.chris013.practice.task40;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+/**
+ * Characterization tests. They describe what the code does today and must stay green through the whole refactoring.
+ * Every expected number was worked out by hand, not copied from the implementation.
+ */
+class CouponServiceTest {
+
+    private final CouponService service = new CouponService();
+
+    @Nested
+    class Normalize {
+
+        @ParameterizedTest
+        @CsvSource(delimiter = '|', value = {
+                "' summer-sale 2O '|SUMMERSALE20",
+                "'winter-o-2024'|WINTER02024",
+                "'abc def'|ABCDEF",
+                "'  o0-1  '|001",
+                "'already-OK1'|ALREADY0K1"
+        })
+        void turns_raw_input_into_the_canonical_form(String raw, String expected) {
+            assertThat(service.normalize(raw)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class IsValid {
+
+        @ParameterizedTest
+        @CsvSource({
+                "ABCDE, false",          // 5 characters: too short
+                "ABCDEF, true",          // 6 characters: the shortest allowed
+                "ABCDEFGHIJK1, true",    // 12 characters: the longest allowed
+                "ABCDEFGHIJKL1, false",  // 13 characters: too long
+                "1ABCDE, false",         // starts with a digit
+                "AB12CD, true",          // digits are fine after the first character
+                "TEST00, false",         // on the blocklist
+                "ADMIN0, false",         // on the blocklist
+                "ADMIN1, true",          // only exact matches are blocked
+                "summer20, false",       // lower case: isValid expects normalized input
+                "AB-CDEF, false",        // dashes are removed by normalize, so they are not allowed here
+                "ABCDE!, false",         // only upper-case letters and digits
+                "'', false"              // empty: the first-character check must not run on it
+        })
+        void accepts_or_rejects_a_normalized_code(String code, boolean expected) {
+            assertThat(service.isValid(code)).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class Create {
+
+        @Test
+        void normalizes_the_code_and_keeps_the_value() {
+            Coupon coupon = service.create(" summer-sale 2O ", DiscountType.PERCENT, new BigDecimal("15"));
+
+            assertThat(coupon).isEqualTo(new Coupon("SUMMERSALE20", DiscountType.PERCENT, new BigDecimal("15")));
+        }
+
+        @Test
+        void rejects_an_invalid_code_and_names_the_normalized_code_in_the_message() {
+            assertThatThrownBy(() -> service.create("admin-0", DiscountType.FIXED, new BigDecimal("5")))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("ADMIN0");
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+                "PERCENT, 1",
+                "PERCENT, 100",
+                "FIXED, 0.01",
+                "FREE_SHIPPING, 0",
+                "FREE_SHIPPING, 0.00"
+        })
+        void accepts_values_inside_the_rule_for_the_type(DiscountType type, String value) {
+            assertThatCode(() -> service.create("CODE12", type, new BigDecimal(value)))
+                    .doesNotThrowAnyException();
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+                "PERCENT, 0",
+                "PERCENT, 101",
+                "FIXED, 0",
+                "FIXED, -1",
+                "FREE_SHIPPING, 5"
+        })
+        void rejects_values_outside_the_rule_for_the_type(DiscountType type, String value) {
+            assertThatThrownBy(() -> service.create("CODE12", type, new BigDecimal(value)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Apply {
+
+        @ParameterizedTest
+        @CsvSource(delimiter = '|', value = {
+                // 15% of 33.33 is 4.9995, rounded to 5.00; 33.33 - 5.00 = 28.33; + 4.90 shipping = 33.23
+                "PERCENT|15|33.33|4.90|33.23",
+                "PERCENT|100|33.33|4.90|4.90",
+                // 10% of 10.25 is 1.025: HALF_UP gives 1.03 (HALF_EVEN would give 1.02); 10.25 - 1.03 = 9.22
+                "PERCENT|10|10.25|0.00|9.22",
+                // 10% of 20.00 is 2.00; 18.00 + 4.90 = 22.90
+                "PERCENT|10|20.00|4.90|22.90",
+                // 20.00 - 5 = 15.00; + 4.90 = 19.90
+                "FIXED|5|20.00|4.90|19.90",
+                // 20.00 - 20 = 0.00; + 4.90 = 4.90
+                "FIXED|20|20.00|4.90|4.90",
+                // 20.00 - 25 is negative, so the total becomes 0.00; + 4.90 = 4.90
+                "FIXED|25|20.00|4.90|4.90",
+                // shipping is waived, so the total is unchanged
+                "FREE_SHIPPING|0|20.00|4.90|20.00"
+        })
+        void computes_the_amount_to_pay(DiscountType type, String value, String total, String shipping, String expected) {
+            Coupon coupon = new Coupon("CODE12", type, new BigDecimal(value));
+
+            BigDecimal amount = service.apply(coupon, new BigDecimal(total), new BigDecimal(shipping));
+
+            assertThat(amount).isEqualTo(new BigDecimal(expected));
+        }
+
+        @Test
+        void always_returns_two_decimal_places() {
+            Coupon coupon = new Coupon("CODE12", DiscountType.FIXED, new BigDecimal("5"));
+
+            BigDecimal amount = service.apply(coupon, new BigDecimal("20"), new BigDecimal("5"));
+
+            assertThat(amount).isEqualTo(new BigDecimal("20.00"));
+        }
+    }
+
+    @Nested
+    class Listeners {
+
+        @Test
+        void notifies_every_listener_in_registration_order_with_the_coupon_and_the_final_amount() {
+            List<String> calls = new ArrayList<>();
+            service.addListener((coupon, total) -> calls.add("first " + coupon.code() + " " + total));
+            service.addListener((coupon, total) -> calls.add("second " + coupon.code() + " " + total));
+            Coupon coupon = new Coupon("SUMMERSALE20", DiscountType.PERCENT, new BigDecimal("15"));
+
+            service.apply(coupon, new BigDecimal("33.33"), new BigDecimal("4.90"));
+
+            assertThat(calls).containsExactly("first SUMMERSALE20 33.23", "second SUMMERSALE20 33.23");
+        }
+
+        @Test
+        void rejects_a_null_listener_without_adding_it() {
+            assertThatThrownBy(() -> service.addListener(null))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("listener");
+        }
+
+        @Test
+        void returns_the_amount_even_when_nobody_listens() {
+            Coupon coupon = new Coupon("FREESHIP1", DiscountType.FREE_SHIPPING, new BigDecimal("0"));
+
+            assertThat(service.apply(coupon, new BigDecimal("20.00"), new BigDecimal("4.90")))
+                    .isEqualTo(new BigDecimal("20.00"));
+        }
+    }
+
+    @Nested
+    class SortForDisplay {
+
+        @Test
+        void sorts_by_type_then_value_highest_first_then_code() {
+            Coupon tenPercentZulu = new Coupon("TENPCT", DiscountType.PERCENT, new BigDecimal("10"));
+            Coupon tenPercentAlpha = new Coupon("ALPHA", DiscountType.PERCENT, new BigDecimal("10"));
+            Coupon fifteenPercent = new Coupon("FIFTEEN", DiscountType.PERCENT, new BigDecimal("15"));
+            Coupon fixedFive = new Coupon("FIVEOFF", DiscountType.FIXED, new BigDecimal("5"));
+            Coupon fixedHundred = new Coupon("BIGFIXED", DiscountType.FIXED, new BigDecimal("100"));
+            Coupon freeShipping = new Coupon("SHIPPING", DiscountType.FREE_SHIPPING, new BigDecimal("0"));
+
+            List<Coupon> sorted = service.sortForDisplay(
+                    List.of(tenPercentZulu, freeShipping, fixedFive, fifteenPercent, fixedHundred, tenPercentAlpha));
+
+            // 100 comes before 5: a plain string comparison of the values would get this wrong
+            assertThat(sorted).extracting(Coupon::code)
+                    .containsExactly("FIFTEEN", "ALPHA", "TENPCT", "BIGFIXED", "FIVEOFF", "SHIPPING");
+        }
+
+        @Test
+        void does_not_change_the_list_it_was_given() {
+            Coupon fixed = new Coupon("FIVEOFF", DiscountType.FIXED, new BigDecimal("5"));
+            Coupon percent = new Coupon("TENPCT", DiscountType.PERCENT, new BigDecimal("10"));
+            List<Coupon> input = new ArrayList<>(List.of(fixed, percent));
+
+            service.sortForDisplay(input);
+
+            assertThat(input).containsExactly(fixed, percent);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task40/NoAnonymousClassesTest.java -->
+**[`NoAnonymousClassesTest.java`](../src/test/java/io/github/chris013/practice/task40/NoAnonymousClassesTest.java)**
+
+```java
+package io.github.chris013.practice.task40;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Test;
+
+/**
+ * Checks the refactoring result on the compiled classes. Anonymous classes compile to {@code Outer$1},
+ * {@code Outer$2}, ...; lambdas and method references do not create class files. So if no anonymous class is
+ * left, the code uses lambdas.
+ */
+class NoAnonymousClassesTest {
+
+    private static final String PACKAGE = "io.github.chris013.practice.task40.";
+
+    @Test
+    void coupon_service_has_no_anonymous_classes() {
+        // The legacy file has 12 anonymous classes. javac may also emit synthetic classes with the same
+        // CouponService$N names (for example the lookup table of a switch on an enum); those are not ours.
+        List<String> found = IntStream.rangeClosed(1, 20)
+                .mapToObj(n -> load("CouponService$" + n))
+                .flatMap(Optional::stream)
+                .filter(c -> c.isAnonymousClass() && !c.isSynthetic())
+                .map(Class::getName)
+                .toList();
+
+        assertThat(found).as("anonymous classes still compiled from CouponService").isEmpty();
+    }
+
+    @Test
+    void no_chain_or_template_classes_remain() {
+        List<String> found = Stream.of("ProcessingStep", "AbstractDiscountCalculator", "ValidationRule")
+                .filter(name -> load(name).isPresent())
+                .toList();
+
+        assertThat(found).as("classes that the lambda version replaces").isEmpty();
+    }
+
+    private static Optional<Class<?>> load(String simpleName) {
+        try {
+            return Optional.of(Class.forName(PACKAGE + simpleName, false, NoAnonymousClassesTest.class.getClassLoader()));
+        } catch (ClassNotFoundException notThere) {
+            return Optional.empty();
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -257,6 +523,160 @@ The characterization tests are in [`CouponServiceTest`](../src/test/java/io/gith
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task40/CouponService.java -->
+**[`CouponService.java`](../solutions/src/main/java/io/github/chris013/practice/task40/CouponService.java)**
+
+```java
+package io.github.chris013.practice.task40;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Predicate;
+
+/**
+ * Validates and normalizes coupon codes, computes discounts and notifies listeners about redemptions.
+ *
+ * <p>Every rule is a small function. The class composes them with {@code andThen}, {@code and} and
+ * {@code Comparator} combinators instead of subclassing a template or chaining step objects.
+ */
+public final class CouponService {
+
+    private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
+    private static final Set<String> BLOCKLIST = Set.of("TEST00", "ADMIN0");
+
+    private static final Function<String, String> TRIM = String::trim;
+    private static final Function<String, String> NORMALIZE = TRIM
+            .andThen(s -> s.replace(" ", "").replace("-", ""))
+            .andThen(s -> s.toUpperCase(Locale.ROOT))
+            .andThen(s -> s.replace('O', '0'));
+
+    private static final Predicate<String> LENGTH_6_TO_12 = code -> code.length() >= 6 && code.length() <= 12;
+    private static final Predicate<String> ONLY_UPPER_CASE_AND_DIGITS =
+            code -> code.chars().allMatch(CouponService::isUpperCaseLetterOrDigit);
+    private static final Predicate<String> NOT_STARTING_WITH_DIGIT =
+            code -> !code.isEmpty() && !isDigit(code.charAt(0));
+    private static final Predicate<String> NOT_BLOCKLISTED = code -> !BLOCKLIST.contains(code);
+    // The isEmpty() guard above makes NOT_STARTING_WITH_DIGIT safe on its own, whatever the order here.
+    private static final Predicate<String> VALID_CODE = LENGTH_6_TO_12
+            .and(ONLY_UPPER_CASE_AND_DIGITS)
+            .and(NOT_STARTING_WITH_DIGIT)
+            .and(NOT_BLOCKLISTED);
+
+    private static final Comparator<Coupon> DISPLAY_ORDER = Comparator.comparing(Coupon::type)
+            .thenComparing(Coupon::value, Comparator.reverseOrder())
+            .thenComparing(Coupon::code);
+
+    private final List<RedemptionListener> listeners = new ArrayList<>();
+
+    /** Trims, removes spaces and dashes, upper-cases, and replaces the letter O with the digit 0. */
+    public String normalize(String raw) {
+        Objects.requireNonNull(raw, "raw");
+        return NORMALIZE.apply(raw);
+    }
+
+    /** Expects an already normalized code. Lower-case input is rejected on purpose. */
+    public boolean isValid(String normalizedCode) {
+        Objects.requireNonNull(normalizedCode, "normalizedCode");
+        return VALID_CODE.test(normalizedCode);
+    }
+
+    /**
+     * Normalizes and validates the code, then checks the value against the rules of the discount type.
+     *
+     * @throws IllegalArgumentException if the code or the value is not acceptable
+     */
+    public Coupon create(String rawCode, DiscountType type, BigDecimal value) {
+        Objects.requireNonNull(rawCode, "rawCode");
+        Objects.requireNonNull(type, "type");
+        Objects.requireNonNull(value, "value");
+        String code = normalize(rawCode);
+        if (!isValid(code)) {
+            throw new IllegalArgumentException("Invalid coupon code: " + code);
+        }
+        if (!ruleFor(type).allowsValue().test(value)) {
+            throw new IllegalArgumentException("Value " + value + " is not allowed for " + type);
+        }
+        return new Coupon(code, type, value);
+    }
+
+    /** Returns the amount the customer pays, with scale 2, and notifies every listener with it. */
+    public BigDecimal apply(Coupon coupon, BigDecimal orderTotal, BigDecimal shippingCost) {
+        Objects.requireNonNull(coupon, "coupon");
+        Objects.requireNonNull(orderTotal, "orderTotal");
+        Objects.requireNonNull(shippingCost, "shippingCost");
+        DiscountRule rule = ruleFor(coupon.type());
+        BigDecimal discounted = rule.totalAfterDiscount().apply(orderTotal, coupon.value());
+        BigDecimal payable = rule.chargesShipping() ? discounted.add(shippingCost) : discounted;
+        BigDecimal amount = payable.setScale(2, RoundingMode.HALF_UP);
+        listeners.forEach(listener -> listener.redeemed(coupon, amount));
+        return amount;
+    }
+
+    public void addListener(RedemptionListener listener) {
+        listeners.add(Objects.requireNonNull(listener, "listener"));
+    }
+
+    /** Sorts by type (enum order), then value (highest first), then code. The input is not changed. */
+    public List<Coupon> sortForDisplay(Collection<Coupon> coupons) {
+        Objects.requireNonNull(coupons, "coupons");
+        return coupons.stream().sorted(DISPLAY_ORDER).toList();
+    }
+
+    /**
+     * The behaviour of one discount type, as data: a record of functions instead of a subclass per type.
+     *
+     * @param allowsValue          is this value acceptable for the type?
+     * @param totalAfterDiscount   (order total, coupon value) to the total before shipping
+     * @param chargesShipping      is the shipping cost added?
+     */
+    private record DiscountRule(
+            Predicate<BigDecimal> allowsValue,
+            BiFunction<BigDecimal, BigDecimal, BigDecimal> totalAfterDiscount,
+            boolean chargesShipping) {
+    }
+
+    /**
+     * One rule per type. A switch expression without {@code default} is exhaustive: if someone adds a
+     * {@code DiscountType} constant, this method stops compiling until the new type has a rule.
+     */
+    private static DiscountRule ruleFor(DiscountType type) {
+        return switch (type) {
+            case PERCENT -> new DiscountRule(
+                    percent -> percent.compareTo(BigDecimal.ONE) >= 0 && percent.compareTo(HUNDRED) <= 0,
+                    (total, percent) -> total.subtract(percentOf(total, percent)),
+                    true);
+            case FIXED -> new DiscountRule(
+                    amount -> amount.signum() > 0,
+                    (total, amount) -> total.subtract(amount).max(BigDecimal.ZERO),
+                    true);
+            case FREE_SHIPPING -> new DiscountRule(
+                    value -> value.signum() == 0,
+                    (total, ignored) -> total,
+                    false);
+        };
+    }
+
+    private static BigDecimal percentOf(BigDecimal total, BigDecimal percent) {
+        return total.multiply(percent).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+    }
+
+    private static boolean isDigit(char c) {
+        return c >= '0' && c <= '9';
+    }
+
+    private static boolean isUpperCaseLetterOrDigit(int c) {
+        return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

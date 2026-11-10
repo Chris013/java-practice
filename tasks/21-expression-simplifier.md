@@ -175,12 +175,405 @@ The simplifier tests have one nested group per rule, a group for formulas that c
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task21/EvaluatorTest.java -->
+**[`EvaluatorTest.java`](../src/test/java/io/github/chris013/practice/task21/EvaluatorTest.java)**
+
+```java
+package io.github.chris013.practice.task21;
+
+import static io.github.chris013.practice.task21.Expr.add;
+import static io.github.chris013.practice.task21.Expr.mul;
+import static io.github.chris013.practice.task21.Expr.neg;
+import static io.github.chris013.practice.task21.Expr.num;
+import static io.github.chris013.practice.task21.Expr.pow;
+import static io.github.chris013.practice.task21.Expr.var;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.Map;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class EvaluatorTest {
+
+    private static final Map<String, Long> VARIABLES = Map.of("x", 3L, "y", -2L);
+
+    private static long eval(Expr expr) {
+        return Evaluator.evaluate(expr, VARIABLES);
+    }
+
+    @Nested
+    class Leaves {
+
+        @Test
+        void a_number_is_its_own_value() {
+            assertThat(eval(num(42))).isEqualTo(42);
+        }
+
+        @Test
+        void a_variable_is_looked_up_by_name() {
+            assertThat(eval(var("y"))).isEqualTo(-2);
+        }
+
+        @Test
+        void an_unknown_variable_is_rejected_and_named() {
+            assertThatThrownBy(() -> eval(var("z")))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("z");
+        }
+    }
+
+    @Nested
+    class Operations {
+
+        @Test
+        void add_and_multiply_follow_the_tree() {
+            assertThat(eval(add(num(2), mul(num(3), num(4))))).isEqualTo(14);
+            assertThat(eval(mul(add(num(2), num(3)), num(4)))).isEqualTo(20);
+        }
+
+        @Test
+        void negation_flips_the_sign() {
+            assertThat(eval(neg(var("x")))).isEqualTo(-3);
+            assertThat(eval(neg(neg(var("x"))))).isEqualTo(3);
+        }
+
+        @ParameterizedTest(name = "{0}^{1} = {2}")
+        @CsvSource({"3, 0, 1", "0, 0, 1", "3, 1, 3", "3, 4, 81", "-2, 3, -8", "2, 62, 4611686018427387904",
+            "-2, 63, -9223372036854775808"})
+        void powers_are_exact(long base, int exponent, long expected) {
+            assertThat(eval(pow(num(base), exponent))).isEqualTo(expected);
+        }
+
+        @Test
+        void a_power_of_minus_one_or_one_with_a_huge_exponent_is_fast() {
+            assertThat(eval(pow(num(-1), 1_000_001))).isEqualTo(-1);
+            assertThat(eval(pow(num(1), 1_000_000_000))).isEqualTo(1);
+        }
+
+        @Test
+        void nested_expressions_use_the_variables() {
+            assertThat(eval(pow(add(var("x"), num(1)), 2))).isEqualTo(16);
+        }
+    }
+
+    @Nested
+    class Overflow {
+
+        @Test
+        void addition_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> eval(add(num(Long.MAX_VALUE), num(1))))
+                    .isInstanceOf(ArithmeticException.class);
+        }
+
+        @Test
+        void multiplication_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> eval(mul(num(Long.MAX_VALUE), num(2))))
+                    .isInstanceOf(ArithmeticException.class);
+        }
+
+        @Test
+        void power_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> eval(pow(num(2), 63))).isInstanceOf(ArithmeticException.class);
+        }
+
+        @Test
+        void negation_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> eval(neg(num(Long.MIN_VALUE)))).isInstanceOf(ArithmeticException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task21/PrinterTest.java -->
+**[`PrinterTest.java`](../src/test/java/io/github/chris013/practice/task21/PrinterTest.java)**
+
+```java
+package io.github.chris013.practice.task21;
+
+import static io.github.chris013.practice.task21.Expr.add;
+import static io.github.chris013.practice.task21.Expr.mul;
+import static io.github.chris013.practice.task21.Expr.neg;
+import static io.github.chris013.practice.task21.Expr.num;
+import static io.github.chris013.practice.task21.Expr.pow;
+import static io.github.chris013.practice.task21.Expr.var;
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.stream.Stream;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+class PrinterTest {
+
+    static Stream<Arguments> expressions() {
+        Expr x = var("x");
+        Expr y = var("y");
+        Expr a = var("a");
+        Expr b = var("b");
+        Expr c = var("c");
+        return Stream.of(
+                Arguments.of(num(7), "7"),
+                Arguments.of(num(-3), "-3"),
+                Arguments.of(x, "x"),
+                Arguments.of(add(x, num(1)), "x + 1"),
+                Arguments.of(mul(num(2), add(x, num(1))), "2 * (x + 1)"),
+                Arguments.of(mul(num(2), x), "2 * x"),
+                Arguments.of(add(mul(num(2), x), num(1)), "2 * x + 1"),
+                Arguments.of(neg(x), "-x"),
+                Arguments.of(neg(add(x, num(1))), "-(x + 1)"),
+                Arguments.of(neg(mul(num(2), x)), "-(2 * x)"),
+                Arguments.of(neg(neg(x)), "-(-x)"),
+                Arguments.of(neg(num(-3)), "-(-3)"),
+                Arguments.of(neg(pow(x, 2)), "-x^2"),
+                Arguments.of(pow(x, 2), "x^2"),
+                Arguments.of(pow(x, 0), "x^0"),
+                Arguments.of(pow(add(x, num(1)), 2), "(x + 1)^2"),
+                Arguments.of(pow(neg(x), 2), "(-x)^2"),
+                Arguments.of(pow(num(-3), 2), "(-3)^2"),
+                Arguments.of(pow(pow(x, 2), 3), "(x^2)^3"),
+                Arguments.of(add(add(a, b), c), "a + b + c"),
+                Arguments.of(add(a, add(b, c)), "a + (b + c)"),
+                Arguments.of(mul(mul(a, b), c), "a * b * c"),
+                Arguments.of(mul(a, mul(b, c)), "a * (b * c)"),
+                Arguments.of(mul(add(a, b), c), "(a + b) * c"),
+                Arguments.of(add(a, mul(b, c)), "a + b * c"),
+                Arguments.of(add(a, neg(b)), "a + -b"),
+                Arguments.of(mul(x, neg(y)), "x * -y"));
+    }
+
+    @ParameterizedTest(name = "{1}")
+    @MethodSource("expressions")
+    void prints_with_only_the_parentheses_that_are_needed(Expr expr, String expected) {
+        assertThat(Printer.print(expr)).isEqualTo(expected);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task21/SimplifierTest.java -->
+**[`SimplifierTest.java`](../src/test/java/io/github/chris013/practice/task21/SimplifierTest.java)**
+
+```java
+package io.github.chris013.practice.task21;
+
+import static io.github.chris013.practice.task21.Expr.add;
+import static io.github.chris013.practice.task21.Expr.mul;
+import static io.github.chris013.practice.task21.Expr.neg;
+import static io.github.chris013.practice.task21.Expr.num;
+import static io.github.chris013.practice.task21.Expr.pow;
+import static io.github.chris013.practice.task21.Expr.var;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+
+class SimplifierTest {
+
+    private static final Expr X = var("x");
+    private static final Expr Y = var("y");
+
+    private static Expr simplify(Expr expr) {
+        return Simplifier.simplify(expr);
+    }
+
+    @Nested
+    class ConstantFolding {
+
+        @Test
+        void folds_arithmetic_on_numbers() {
+            assertThat(simplify(add(num(2), num(3)))).isEqualTo(num(5));
+            assertThat(simplify(mul(num(2), num(3)))).isEqualTo(num(6));
+            assertThat(simplify(neg(num(4)))).isEqualTo(num(-4));
+            assertThat(simplify(pow(num(-2), 3))).isEqualTo(num(-8));
+        }
+
+        @Test
+        void folds_nested_constants_bottom_up() {
+            assertThat(simplify(add(mul(num(2), num(3)), pow(num(2), 2)))).isEqualTo(num(10));
+        }
+
+        @Test
+        void an_overflowing_fold_throws_like_evaluation_does() {
+            assertThatThrownBy(() -> simplify(add(num(Long.MAX_VALUE), num(1))))
+                    .isInstanceOf(ArithmeticException.class);
+        }
+
+        @Test
+        void a_negation_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> simplify(neg(num(Long.MIN_VALUE)))).isInstanceOf(ArithmeticException.class);
+        }
+    }
+
+    @Nested
+    class Identities {
+
+        @Test
+        void adding_zero_on_either_side_gives_the_other_side() {
+            assertThat(simplify(add(X, num(0)))).isEqualTo(X);
+            assertThat(simplify(add(num(0), X))).isEqualTo(X);
+            assertThat(simplify(add(mul(X, Y), num(0)))).isEqualTo(mul(X, Y));
+        }
+
+        @Test
+        void multiplying_by_one_on_either_side_gives_the_other_side() {
+            assertThat(simplify(mul(X, num(1)))).isEqualTo(X);
+            assertThat(simplify(mul(num(1), X))).isEqualTo(X);
+        }
+
+        @Test
+        void multiplying_by_zero_on_either_side_gives_zero() {
+            assertThat(simplify(mul(X, num(0)))).isEqualTo(num(0));
+            assertThat(simplify(mul(num(0), add(X, Y)))).isEqualTo(num(0));
+        }
+
+        @Test
+        void a_double_negation_is_removed() {
+            assertThat(simplify(neg(neg(X)))).isEqualTo(X);
+        }
+
+        @Test
+        void a_power_of_zero_is_one_and_a_power_of_one_is_the_base() {
+            assertThat(simplify(pow(X, 0))).isEqualTo(num(1));
+            assertThat(simplify(pow(X, 1))).isEqualTo(X);
+        }
+
+        @Test
+        void zero_to_a_positive_power_is_zero() {
+            assertThat(simplify(pow(num(0), 5))).isEqualTo(num(0));
+        }
+    }
+
+    @Nested
+    class SelfAddition {
+
+        @Test
+        void adding_a_term_to_itself_becomes_two_times_the_term() {
+            assertThat(simplify(add(X, X))).isEqualTo(mul(num(2), X));
+        }
+
+        @Test
+        void works_for_compound_terms_too() {
+            Expr term = add(X, Y);
+            assertThat(simplify(add(term, term))).isEqualTo(mul(num(2), term));
+        }
+
+        @Test
+        void different_terms_are_left_alone() {
+            assertThat(simplify(add(X, Y))).isEqualTo(add(X, Y));
+        }
+    }
+
+    @Nested
+    class ConstantGrouping {
+
+        @Test
+        void a_constant_times_a_constant_times_a_term_is_grouped() {
+            assertThat(simplify(mul(num(2), mul(num(3), X)))).isEqualTo(mul(num(6), X));
+        }
+
+        @Test
+        void a_constant_on_the_right_is_not_moved_to_the_left() {
+            // No commutative reordering: the simplifier only knows the rules listed in the task.
+            assertThat(simplify(mul(num(2), mul(X, num(3))))).isEqualTo(mul(num(2), mul(X, num(3))));
+        }
+
+        @Test
+        void a_grouped_constant_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> simplify(mul(num(Long.MAX_VALUE), mul(num(2), X))))
+                    .isInstanceOf(ArithmeticException.class);
+        }
+    }
+
+    @Nested
+    class CombinedRules {
+
+        @Test
+        void an_inner_simplification_enables_an_outer_one() {
+            Expr formula = mul(add(mul(X, num(1)), num(0)), add(pow(Y, 1), num(0)));
+            assertThat(simplify(formula)).isEqualTo(mul(X, Y));
+        }
+
+        @Test
+        void negations_and_zeros_cancel_out_in_one_go() {
+            assertThat(simplify(neg(neg(add(X, num(0)))))).isEqualTo(X);
+        }
+    }
+
+    @Nested
+    class FixedPoint {
+
+        @Test
+        void a_rule_output_that_matches_another_rule_is_simplified_again() {
+            // 2x + 2x -> 2 * (2x) -> 4x. The second step only exists because of the fixed-point loop.
+            Expr twiceTwoX = add(mul(num(2), X), mul(num(2), X));
+            assertThat(simplify(twiceTwoX)).isEqualTo(mul(num(4), X));
+        }
+    }
+
+    @Nested
+    class Leftovers {
+
+        @ParameterizedTest(name = "{0} stays as it is")
+        @MethodSource("irreducible")
+        void formulas_without_a_rule_stay_the_same(Expr expr) {
+            assertThat(simplify(expr)).isEqualTo(expr);
+        }
+
+        static Stream<Expr> irreducible() {
+            return Stream.of(X, add(X, Y), mul(X, Y), mul(X, num(2)), neg(X), pow(X, 2), neg(pow(X, 2)));
+        }
+    }
+
+    /** Ten formulas that exercise several rules at once. Every variable used here has a value in ASSIGNMENTS. */
+    static Stream<Expr> samples() {
+        Expr x = X;
+        Expr y = Y;
+        Expr z = var("z");
+        return Stream.of(
+                mul(add(mul(x, num(1)), num(0)), add(pow(y, 1), num(0))),
+                mul(add(x, x), mul(num(2), mul(num(3), y))),
+                neg(neg(add(x, num(0)))),
+                add(pow(y, 1), mul(num(0), z)),
+                mul(pow(add(x, num(1)), 2), num(1)),
+                add(mul(num(2), x), mul(num(2), x)),
+                mul(num(3), mul(num(2), add(x, y))),
+                neg(mul(num(1), pow(z, 0))),
+                add(add(x, num(0)), add(y, add(z, num(0)))),
+                pow(neg(pow(x, 1)), 3));
+    }
+
+    /** Three different assignments, chosen so that signs and zero both show up. */
+    private static final List<Map<String, Long>> ASSIGNMENTS = List.of(
+            Map.of("x", 3L, "y", -2L, "z", 5L),
+            Map.of("x", 0L, "y", 7L, "z", -1L),
+            Map.of("x", -4L, "y", 1L, "z", 2L));
+
+    @ParameterizedTest
+    @MethodSource("samples")
+    void simplifying_keeps_the_value_for_every_assignment(Expr expr) {
+        Expr simplified = simplify(expr);
+        for (Map<String, Long> variables : ASSIGNMENTS) {
+            assertThat(Evaluator.evaluate(simplified, variables)).isEqualTo(Evaluator.evaluate(expr, variables));
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("samples")
+    void simplifying_twice_changes_nothing(Expr expr) {
+        Expr once = simplify(expr);
+        assertThat(simplify(once)).isEqualTo(once);
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -226,12 +619,222 @@ The simplifier tests have one nested group per rule, a group for formulas that c
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task21/Simplifier.java -->
+**[`Simplifier.java`](../solutions/src/main/java/io/github/chris013/practice/task21/Simplifier.java)**
+
+```java
+package io.github.chris013.practice.task21;
+
+import java.util.Objects;
+
+/**
+ * Rewrites an expression into a smaller one with the same value.
+ * <p>Task 21: read {@code tasks/21-expression-simplifier.md} first.
+ */
+public final class Simplifier {
+
+    private Simplifier() {}
+
+    /**
+     * Applies the rewrite rules bottom-up and repeats until a pass changes nothing (a fixed point). The result
+     * evaluates to the same value as the input for every assignment of the variables.
+     *
+     * @throws ArithmeticException if constant folding overflows, exactly as evaluation would
+     */
+    public static Expr simplify(Expr expr) {
+        Objects.requireNonNull(expr, "expr");
+        Expr current = expr;
+        while (true) {
+            Expr next = pass(current);
+            if (next.equals(current)) {
+                return current;
+            }
+            current = next;
+        }
+    }
+
+    /**
+     * One bottom-up pass: children first, then the rules on the parent. A rule can produce a shape that another rule
+     * would match (for example {@code x + x} gives {@code 2 * x}, and {@code 2 * x + 2 * x} gives {@code 2 * (2 * x)}),
+     * and the parent does not see that until the next pass. That is why {@link #simplify} loops.
+     */
+    private static Expr pass(Expr expr) {
+        return switch (expr) {
+            case Num n -> n;
+            case Var v -> v;
+            case Neg(Expr operand) -> negation(new Neg(pass(operand)));
+            case Add(Expr left, Expr right) -> sum(new Add(pass(left), pass(right)));
+            case Mul(Expr left, Expr right) -> product(new Mul(pass(left), pass(right)));
+            case Pow(Expr base, int exponent) -> power(new Pow(pass(base), exponent));
+        };
+    }
+
+    private static Expr negation(Neg neg) {
+        return switch (neg) {
+            case Neg(Num(long n)) -> Expr.num(Math.negateExact(n));
+            case Neg(Neg(Expr x)) -> x;
+            case Neg n -> n;
+        };
+    }
+
+    private static Expr sum(Add add) {
+        return switch (add) {
+            case Add(Num(long a), Num(long b)) -> Expr.num(Math.addExact(a, b));
+            case Add(Expr x, Num(long n)) when n == 0 -> x;
+            case Add(Num(long n), Expr x) when n == 0 -> x;
+            // Records have structural equals, so "the same term twice" is a plain equality check.
+            case Add(Expr x, Expr y) when x.equals(y) -> Expr.mul(Expr.num(2), x);
+            case Add a -> a;
+        };
+    }
+
+    private static Expr product(Mul mul) {
+        return switch (mul) {
+            case Mul(Num(long a), Num(long b)) -> Expr.num(Math.multiplyExact(a, b));
+            case Mul(Num(long n), _) when n == 0 -> Expr.num(0);
+            case Mul(_, Num(long n)) when n == 0 -> Expr.num(0);
+            case Mul(Expr x, Num(long n)) when n == 1 -> x;
+            case Mul(Num(long n), Expr x) when n == 1 -> x;
+            case Mul(Num(long n), Mul(Num(long m), Expr x)) -> Expr.mul(Expr.num(Math.multiplyExact(n, m)), x);
+            case Mul m -> m;
+        };
+    }
+
+    private static Expr power(Pow pow) {
+        return switch (pow) {
+            case Pow(Num(long base), int exponent) -> Expr.num(Evaluator.exactPower(base, exponent));
+            case Pow(_, int exponent) when exponent == 0 -> Expr.num(1);
+            case Pow(Expr x, int exponent) when exponent == 1 -> x;
+            case Pow p -> p;
+        };
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task21/Printer.java -->
+**[`Printer.java`](../solutions/src/main/java/io/github/chris013/practice/task21/Printer.java)**
+
+```java
+package io.github.chris013.practice.task21;
+
+import java.util.Objects;
+
+/**
+ * Turns an expression tree back into readable text with as few parentheses as possible.
+ * <p>Task 21: read {@code tasks/21-expression-simplifier.md} first.
+ */
+public final class Printer {
+
+    // Higher number = binds tighter. A child is parenthesized when it binds looser than its slot requires.
+    private static final int ADD = 1;
+    private static final int MUL = 2;
+    private static final int NEG = 3;
+    private static final int POW = 4;
+    private static final int ATOM = 5;
+
+    private Printer() {}
+
+    /**
+     * Examples: {@code x + 1}, {@code 2 * (x + 1)}, {@code -(x + 1)}, {@code (-x)^2}, {@code a + (b + c)}.
+     */
+    public static String print(Expr expr) {
+        Objects.requireNonNull(expr, "expr");
+        return switch (expr) {
+            case Num(long value) -> Long.toString(value);
+            case Var(String name) -> name;
+            // Add and Mul are left-associative: the left child may have the same precedence without parentheses,
+            // the right child may not, so a + (b + c) keeps the structure of the tree visible.
+            case Add(Expr left, Expr right) -> printAt(left, ADD) + " + " + printAt(right, MUL);
+            case Mul(Expr left, Expr right) -> printAt(left, MUL) + " * " + printAt(right, NEG);
+            case Neg(Expr operand) -> "-" + printAt(operand, POW);
+            case Pow(Expr base, int exponent) -> printAt(base, ATOM) + "^" + exponent;
+        };
+    }
+
+    private static String printAt(Expr expr, int minPrecedence) {
+        String text = print(expr);
+        return precedence(expr) < minPrecedence ? "(" + text + ")" : text;
+    }
+
+    /** A negative number reads like a negation, so it gets the negation's precedence. */
+    private static int precedence(Expr expr) {
+        return switch (expr) {
+            case Add ignored -> ADD;
+            case Mul ignored -> MUL;
+            case Neg ignored -> NEG;
+            case Pow ignored -> POW;
+            case Num(long value) -> value < 0 ? NEG : ATOM;
+            case Var ignored -> ATOM;
+        };
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task21/Evaluator.java -->
+**[`Evaluator.java`](../solutions/src/main/java/io/github/chris013/practice/task21/Evaluator.java)**
+
+```java
+package io.github.chris013.practice.task21;
+
+import java.util.Map;
+import java.util.Objects;
+
+/**
+ * Computes the value of an expression with exact {@code long} arithmetic.
+ * <p>Task 21: read {@code tasks/21-expression-simplifier.md} first.
+ */
+public final class Evaluator {
+
+    private Evaluator() {}
+
+    /**
+     * @throws IllegalArgumentException if the expression uses a variable that is not in {@code variables}
+     * @throws ArithmeticException if an intermediate result does not fit into a {@code long}
+     */
+    public static long evaluate(Expr expr, Map<String, Long> variables) {
+        Objects.requireNonNull(expr, "expr");
+        Objects.requireNonNull(variables, "variables");
+        return switch (expr) {
+            case Num(long value) -> value;
+            case Var(String name) -> lookup(name, variables);
+            case Add(Expr left, Expr right) -> Math.addExact(evaluate(left, variables), evaluate(right, variables));
+            case Mul(Expr left, Expr right) -> Math.multiplyExact(evaluate(left, variables), evaluate(right, variables));
+            case Neg(Expr operand) -> Math.negateExact(evaluate(operand, variables));
+            case Pow(Expr base, int exponent) -> exactPower(evaluate(base, variables), exponent);
+        };
+    }
+
+    private static long lookup(String name, Map<String, Long> variables) {
+        Long value = variables.get(name);
+        if (value == null) {
+            throw new IllegalArgumentException("unknown variable: " + name);
+        }
+        return value;
+    }
+
+    /**
+     * Integer power by repeated squaring, with overflow checks. It squares only when a higher bit of the exponent
+     * is still to come, so it never squares a value larger than the final result. That keeps {@code 2^62} valid
+     * while {@code 2^63} throws, and {@code 1^1000000000} takes about 30 steps instead of a billion multiplications.
+     */
+    static long exactPower(long base, int exponent) {
+        long result = 1;
+        long factor = base;
+        int remaining = exponent;
+        while (remaining > 0) {
+            if ((remaining & 1) == 1) {
+                result = Math.multiplyExact(result, factor);
+            }
+            remaining >>= 1;
+            if (remaining > 0) {
+                factor = Math.multiplyExact(factor, factor);
+            }
+        }
+        return result;
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

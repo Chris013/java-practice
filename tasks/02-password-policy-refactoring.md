@@ -118,9 +118,146 @@ Run: `mvn test -Dtest='**/task02/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task02/PasswordCheckerCharacterizationTest.java -->
+**[`PasswordCheckerCharacterizationTest.java`](../src/test/java/io/github/chris013/practice/task02/PasswordCheckerCharacterizationTest.java)**
+
+```java
+package io.github.chris013.practice.task02;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.util.stream.Stream;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+
+/**
+ * Pins down what {@link PasswordChecker#check} does <em>today</em>, quirks included. These tests are green before you
+ * start and must stay green after every single refactoring step.
+ */
+class PasswordCheckerCharacterizationTest {
+
+    private static final String OK = null;
+    private static final boolean USER = false;
+    private static final boolean ADMIN = true;
+
+    static Stream<Arguments> currentBehaviour() {
+        return Stream.of(
+                Arguments.of(null, "anna", USER, "Password missing"),
+                Arguments.of("Ab1", "anna", USER, "Password too short"),
+                Arguments.of("Abcdef1", "anna", USER, "Password too short"),
+                Arguments.of("Abcdefg1", "anna", USER, OK),
+                Arguments.of("abcdefgh1", "anna", USER, "Password needs digit, upper and lower case letter"),
+                Arguments.of("ABCDEFGH1", "anna", USER, "Password needs digit, upper and lower case letter"),
+                Arguments.of("Abcdefghi", "anna", USER, "Password needs digit, upper and lower case letter"),
+                Arguments.of("Annabelle2024", "anna", USER, "Password must not contain the username"),
+                Arguments.of("xANNAx2024x", "anna", USER, "Password must not contain the username"),
+                Arguments.of("Abcdefgh1", null, USER, OK),
+                Arguments.of("Abcdefg1" + "x".repeat(56), "anna", USER, OK),
+                Arguments.of("Abcdefg1" + "x".repeat(57), "anna", USER, "Password too long"),
+                Arguments.of("x".repeat(70), "anna", USER, "Password needs digit, upper and lower case letter"),
+
+                Arguments.of("abc", "root", ADMIN, "Password too short"),
+                Arguments.of("Abcdefg1!", "root", ADMIN, "Admin passwords need at least 12 characters"),
+                Arguments.of("abcdefghij", "root", ADMIN, "Admin passwords need at least 12 characters"),
+                Arguments.of("Abcdefghijk1", "root", ADMIN, "Admin passwords need a special character"),
+                Arguments.of("Abcdefghij1!", "root", ADMIN, OK),
+                Arguments.of("Abcdefghij1 ", "root", ADMIN, OK),
+                Arguments.of("Rootabcdefg1!", "root", ADMIN, "Password must not contain the username"),
+                Arguments.of("Abcdefghij1" + "x".repeat(60), "root", ADMIN, "Admin passwords need a special character"),
+
+                // Known quirk: an empty username is contained in every string, so every password is rejected.
+                // Keep this behaviour while refactoring. Fixing it is a separate, deliberate change (see stretch goals).
+                Arguments.of("Abcdefgh1", "", USER, "Password must not contain the username"));
+    }
+
+    @ParameterizedTest(name = "[{index}] check(\"{0}\", \"{1}\", admin={2}) -> {3}")
+    @MethodSource("currentBehaviour")
+    void behaves_exactly_as_before(String password, String username, boolean isAdmin, String expected) {
+        assertThat(new PasswordChecker().check(password, username, isAdmin)).isEqualTo(expected);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task02/PasswordPolicyTest.java -->
+**[`PasswordPolicyTest.java`](../src/test/java/io/github/chris013/practice/task02/PasswordPolicyTest.java)**
+
+```java
+package io.github.chris013.practice.task02;
+
+import static io.github.chris013.practice.task02.PasswordViolation.ADMIN_MISSING_SPECIAL_CHARACTER;
+import static io.github.chris013.practice.task02.PasswordViolation.ADMIN_TOO_SHORT;
+import static io.github.chris013.practice.task02.PasswordViolation.CONTAINS_USERNAME;
+import static io.github.chris013.practice.task02.PasswordViolation.MISSING;
+import static io.github.chris013.practice.task02.PasswordViolation.MISSING_CHARACTER_CLASSES;
+import static io.github.chris013.practice.task02.PasswordViolation.TOO_LONG;
+import static io.github.chris013.practice.task02.PasswordViolation.TOO_SHORT;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class PasswordPolicyTest {
+
+    private final PasswordPolicy policy = new PasswordPolicy();
+
+    @Test
+    void accepts_a_good_password() {
+        assertThat(policy.violations("Abcdefgh1", "anna", Role.USER)).isEmpty();
+        assertThat(policy.violations("Abcdefghij1!", "root", Role.ADMIN)).isEmpty();
+    }
+
+    @Test
+    void reports_only_missing_when_there_is_no_password() {
+        assertThat(policy.violations(null, "anna", Role.USER)).containsExactly(MISSING);
+    }
+
+    @Test
+    void reports_every_violation_at_once_in_a_stable_order() {
+        assertThat(policy.violations("abc", "abc", Role.USER))
+                .containsExactly(TOO_SHORT, MISSING_CHARACTER_CLASSES, CONTAINS_USERNAME);
+    }
+
+    @Test
+    void applies_the_stricter_rules_to_admins_only() {
+        assertThat(policy.violations("abc", "root", Role.ADMIN))
+                .containsExactly(TOO_SHORT, ADMIN_TOO_SHORT, MISSING_CHARACTER_CLASSES, ADMIN_MISSING_SPECIAL_CHARACTER);
+        assertThat(policy.violations("Abcdefgh1", "anna", Role.USER)).isEmpty();
+    }
+
+    @Test
+    void reports_too_long_together_with_other_problems() {
+        assertThat(policy.violations("x".repeat(70), "anna", Role.USER))
+                .containsExactly(MISSING_CHARACTER_CLASSES, TOO_LONG);
+    }
+
+    @Test
+    void needs_a_role() {
+        assertThatThrownBy(() -> policy.violations("Abcdefgh1", "anna", null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    /** After part 2 the old API must still behave like before: it reports the first violation only. */
+    @ParameterizedTest
+    @CsvSource({
+        "abc,          anna, false",
+        "abcdefghij,   root, true",
+        "Annabelle2024, anna, false",
+        "Abcdefgh1,    anna, false",
+        "Abcdefghijk1, root, true"
+    })
+    void agrees_with_the_legacy_checker(String password, String username, boolean isAdmin) {
+        String expected = policy.violations(password, username, isAdmin ? Role.ADMIN : Role.USER).stream()
+                .findFirst()
+                .map(PasswordViolation::message)
+                .orElse(null);
+
+        assertThat(new PasswordChecker().check(password, username, isAdmin)).isEqualTo(expected);
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -164,9 +301,140 @@ Run: `mvn test -Dtest='**/task02/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task02/PasswordPolicy.java -->
+**[`PasswordPolicy.java`](../solutions/src/main/java/io/github/chris013/practice/task02/PasswordPolicy.java)**
+
+```java
+package io.github.chris013.practice.task02;
+
+import static io.github.chris013.practice.task02.PasswordViolation.ADMIN_MISSING_SPECIAL_CHARACTER;
+import static io.github.chris013.practice.task02.PasswordViolation.ADMIN_TOO_SHORT;
+import static io.github.chris013.practice.task02.PasswordViolation.CONTAINS_USERNAME;
+import static io.github.chris013.practice.task02.PasswordViolation.MISSING;
+import static io.github.chris013.practice.task02.PasswordViolation.MISSING_CHARACTER_CLASSES;
+import static io.github.chris013.practice.task02.PasswordViolation.TOO_LONG;
+import static io.github.chris013.practice.task02.PasswordViolation.TOO_SHORT;
+import static java.util.stream.Collectors.toCollection;
+
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.Predicate;
+
+/** Our password rules, as a list you can read top to bottom. */
+public final class PasswordPolicy {
+
+    private static final int MIN_LENGTH = 8;
+    private static final int MIN_ADMIN_LENGTH = 12;
+    private static final int MAX_LENGTH = 64;
+
+    private static final List<Rule> RULES = List.of(
+            new Rule(TOO_SHORT, candidate -> candidate.length() < MIN_LENGTH),
+            new Rule(ADMIN_TOO_SHORT, candidate -> candidate.isAdmin() && candidate.length() < MIN_ADMIN_LENGTH),
+            new Rule(MISSING_CHARACTER_CLASSES, candidate -> !candidate.hasDigitUpperAndLowerCase()),
+            new Rule(ADMIN_MISSING_SPECIAL_CHARACTER, candidate -> candidate.isAdmin() && !candidate.hasSpecialCharacter()),
+            new Rule(CONTAINS_USERNAME, Candidate::containsUsername),
+            new Rule(TOO_LONG, candidate -> candidate.length() > MAX_LENGTH));
+
+    /**
+     * @return every rule the password violates, iterated in the order of {@link PasswordViolation}'s constants;
+     *     empty if the password is acceptable
+     */
+    public Set<PasswordViolation> violations(String password, String username, Role role) {
+        Objects.requireNonNull(role, "role");
+        if (password == null) {
+            return EnumSet.of(MISSING);
+        }
+        Candidate candidate = new Candidate(password, username, role);
+        return RULES.stream()
+                .filter(rule -> rule.isViolatedBy(candidate))
+                .map(Rule::violation)
+                .collect(toCollection(() -> EnumSet.noneOf(PasswordViolation.class)));
+    }
+
+    private record Rule(PasswordViolation violation, Predicate<Candidate> violatedBy) {
+
+        boolean isViolatedBy(Candidate candidate) {
+            return violatedBy.test(candidate);
+        }
+    }
+
+    private record Candidate(String password, String username, Role role) {
+
+        int length() {
+            return password.length();
+        }
+
+        boolean isAdmin() {
+            return role == Role.ADMIN;
+        }
+
+        boolean hasDigitUpperAndLowerCase() {
+            return contains(CharacterClass.DIGIT) && contains(CharacterClass.UPPER_CASE) && contains(CharacterClass.LOWER_CASE);
+        }
+
+        boolean hasSpecialCharacter() {
+            return contains(CharacterClass.SPECIAL);
+        }
+
+        boolean containsUsername() {
+            // Known quirk kept from the legacy checker: an empty username matches every password.
+            return username != null && password.toLowerCase().contains(username.toLowerCase());
+        }
+
+        private boolean contains(CharacterClass characterClass) {
+            return password.chars().anyMatch(character -> CharacterClass.of(character) == characterClass);
+        }
+    }
+
+    private enum CharacterClass {
+        DIGIT,
+        UPPER_CASE,
+        LOWER_CASE,
+        /** Anything else, including whitespace. */
+        SPECIAL;
+
+        static CharacterClass of(int character) {
+            if (Character.isDigit(character)) {
+                return DIGIT;
+            }
+            if (Character.isUpperCase(character)) {
+                return UPPER_CASE;
+            }
+            if (Character.isLowerCase(character)) {
+                return LOWER_CASE;
+            }
+            return SPECIAL;
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task02/PasswordChecker.java -->
+**[`PasswordChecker.java`](../solutions/src/main/java/io/github/chris013/practice/task02/PasswordChecker.java)**
+
+```java
+package io.github.chris013.practice.task02;
+
+/**
+ * Legacy entry point, kept so existing callers don't break. New code should use {@link PasswordPolicy}, which
+ * reports every violation instead of only the first one.
+ */
+public class PasswordChecker {
+
+    private final PasswordPolicy policy = new PasswordPolicy();
+
+    /** @return the message of the first violated rule, or {@code null} if the password is acceptable */
+    public String check(String password, String username, boolean isAdmin) {
+        Role role = isAdmin ? Role.ADMIN : Role.USER;
+        return policy.violations(password, username, role).stream()
+                .findFirst()
+                .map(PasswordViolation::message)
+                .orElse(null);
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

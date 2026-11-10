@@ -136,15 +136,438 @@ The time is always controlled by [`MutableInstantSource`](../src/test/java/io/gi
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task11/MutableInstantSource.java -->
+**[`MutableInstantSource.java`](../src/test/java/io/github/chris013/practice/task11/MutableInstantSource.java)**
+
+```java
+package io.github.chris013.practice.task11;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.InstantSource;
+import java.util.Objects;
+
+/** An {@link InstantSource} that only moves when the test says so. Safe to read from many threads. */
+final class MutableInstantSource implements InstantSource {
+
+    private volatile Instant now;
+
+    MutableInstantSource(Instant start) {
+        this.now = Objects.requireNonNull(start, "start");
+    }
+
+    void set(Instant instant) {
+        now = instant;
+    }
+
+    void advance(Duration duration) {
+        now = now.plus(duration);
+    }
+
+    @Override
+    public Instant instant() {
+        return now;
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task11/TokenBucketTest.java -->
+**[`TokenBucketTest.java`](../src/test/java/io/github/chris013/practice/task11/TokenBucketTest.java)**
+
+```java
+package io.github.chris013.practice.task11;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.time.Instant;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class TokenBucketTest {
+
+    private static final Instant START = Instant.parse("2026-01-01T12:00:00Z");
+    private static final Duration PERIOD = Duration.ofSeconds(1);
+
+    private final MutableInstantSource time = new MutableInstantSource(START);
+
+    private TokenBucket bucket(long capacity, long refillTokens) {
+        return new TokenBucket(capacity, refillTokens, PERIOD, time);
+    }
+
+    @Nested
+    class Consuming {
+
+        @Test
+        void starts_full() {
+            assertThat(bucket(5, 1).availableTokens()).isEqualTo(5);
+        }
+
+        @Test
+        void gives_out_one_token_per_call_until_empty() {
+            TokenBucket bucket = bucket(3, 1);
+
+            assertThat(bucket.tryConsume()).isTrue();
+            assertThat(bucket.tryConsume()).isTrue();
+            assertThat(bucket.tryConsume()).isTrue();
+            assertThat(bucket.tryConsume()).isFalse();
+            assertThat(bucket.availableTokens()).isZero();
+        }
+
+        @Test
+        void consumes_several_tokens_at_once() {
+            TokenBucket bucket = bucket(10, 1);
+
+            assertThat(bucket.tryConsume(4)).isTrue();
+            assertThat(bucket.availableTokens()).isEqualTo(6);
+            assertThat(bucket.tryConsume(6)).isTrue();
+            assertThat(bucket.availableTokens()).isZero();
+        }
+
+        @Test
+        void refuses_without_taking_any_token_when_there_are_not_enough() {
+            TokenBucket bucket = bucket(5, 1);
+            assertThat(bucket.tryConsume(3)).isTrue();
+
+            assertThat(bucket.tryConsume(3)).isFalse();
+            assertThat(bucket.availableTokens()).isEqualTo(2);
+            assertThat(bucket.tryConsume(2)).isTrue();
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0", "-1", "6"})
+        void rejects_a_token_count_outside_1_to_capacity_and_takes_nothing(long tokens) {
+            TokenBucket bucket = bucket(5, 1);
+
+            assertThatThrownBy(() -> bucket.tryConsume(tokens)).isInstanceOf(IllegalArgumentException.class);
+            assertThat(bucket.availableTokens()).isEqualTo(5);
+        }
+    }
+
+    @Nested
+    class Refilling {
+
+        @Test
+        void adds_refill_tokens_once_each_full_period() {
+            TokenBucket bucket = bucket(10, 2);
+            assertThat(bucket.tryConsume(10)).isTrue();
+
+            time.advance(Duration.ofMillis(999));
+            assertThat(bucket.availableTokens()).isZero();
+
+            time.advance(Duration.ofMillis(1));
+            assertThat(bucket.availableTokens()).isEqualTo(2);
+        }
+
+        @Test
+        void adds_all_the_periods_that_elapsed_at_once() {
+            TokenBucket bucket = bucket(10, 2);
+            bucket.tryConsume(10);
+
+            time.advance(PERIOD.multipliedBy(3));
+
+            assertThat(bucket.availableTokens()).isEqualTo(6);
+        }
+
+        @Test
+        void never_goes_above_capacity() {
+            TokenBucket bucket = bucket(5, 2);
+            bucket.tryConsume(5);
+
+            time.advance(PERIOD.multipliedBy(100));
+
+            assertThat(bucket.availableTokens()).isEqualTo(5);
+        }
+
+        @Test
+        void caps_the_refill_when_one_period_would_overshoot_the_capacity() {
+            TokenBucket bucket = bucket(5, 2);
+            bucket.tryConsume(1); // 4 left
+
+            time.advance(PERIOD);
+
+            assertThat(bucket.availableTokens()).isEqualTo(5); // 4 + 2 would be 6
+        }
+
+        @Test
+        void keeps_the_part_of_a_period_that_has_not_finished_yet() {
+            TokenBucket bucket = bucket(10, 1);
+            bucket.tryConsume(10);
+
+            time.advance(Duration.ofMillis(1500));
+            assertThat(bucket.availableTokens()).isEqualTo(1);
+
+            // 1.5 periods, then 0.5 more: two whole periods have passed, so two refills.
+            time.advance(Duration.ofMillis(500));
+            assertThat(bucket.availableTokens()).isEqualTo(2);
+        }
+
+        @Test
+        void a_full_bucket_restarts_its_clock_so_the_next_token_comes_one_full_period_after_spending() {
+            TokenBucket bucket = bucket(5, 1);
+            time.advance(PERIOD.multipliedBy(10)); // ten periods of waiting cannot store more than 5 tokens
+
+            assertThat(bucket.tryConsume(5)).isTrue();
+
+            time.advance(Duration.ofMillis(999));
+            assertThat(bucket.availableTokens()).isZero();
+            time.advance(Duration.ofMillis(1));
+            assertThat(bucket.availableTokens()).isEqualTo(1);
+        }
+
+        @Test
+        void a_bucket_that_is_refilled_to_full_restarts_its_clock_at_that_moment() {
+            TokenBucket bucket = bucket(5, 1);
+            bucket.tryConsume(1); // 4 left, refill clock still at START
+
+            time.advance(Duration.ofMillis(1500));
+            assertThat(bucket.availableTokens()).isEqualTo(5); // full at 1.5 s
+
+            assertThat(bucket.tryConsume(5)).isTrue(); // empty now, clock restarts at 1.5 s
+            time.advance(Duration.ofMillis(999));
+            assertThat(bucket.availableTokens()).isZero();
+            time.advance(Duration.ofMillis(1));
+            assertThat(bucket.availableTokens()).isEqualTo(1);
+        }
+
+        @Test
+        void a_tiny_period_and_a_long_gap_fill_the_bucket_without_an_exception() {
+            TokenBucket bucket = new TokenBucket(5, 1, Duration.ofNanos(1), time);
+            assertThat(bucket.tryConsume(5)).isTrue();
+
+            // About 1.3e19 nanoseconds, more than a long can count (about 9.2e18). The bucket must still be full.
+            time.advance(Duration.ofDays(400 * 365L));
+
+            assertThat(bucket.availableTokens()).isEqualTo(5);
+        }
+    }
+
+    @Nested
+    class TimeGoingBackwards {
+
+        @Test
+        void neither_adds_nor_removes_tokens() {
+            TokenBucket bucket = bucket(5, 1);
+            bucket.tryConsume(2); // 3 left
+
+            time.set(START.minus(Duration.ofHours(1)));
+            assertThat(bucket.availableTokens()).isEqualTo(3);
+
+            time.set(START.plus(PERIOD));
+            assertThat(bucket.availableTokens()).isEqualTo(4);
+        }
+    }
+
+    @Nested
+    class Validation {
+
+        @ParameterizedTest
+        @CsvSource({"0,1,PT1S", "-3,1,PT1S", "5,0,PT1S", "5,-1,PT1S", "5,1,PT0S", "5,1,-PT1S"})
+        void rejects_invalid_parameters(long capacity, long refillTokens, String refillPeriod) {
+            assertThatThrownBy(() -> new TokenBucket(capacity, refillTokens, Duration.parse(refillPeriod), time))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_null_arguments_and_names_them() {
+            assertThatThrownBy(() -> new TokenBucket(5, 1, null, time))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("refillPeriod");
+            assertThatThrownBy(() -> new TokenBucket(5, 1, PERIOD, null))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("time");
+        }
+
+        @Test
+        void accepts_the_smallest_valid_settings() {
+            TokenBucket bucket = new TokenBucket(1, 1, Duration.ofNanos(1), time);
+
+            assertThat(bucket.tryConsume()).isTrue();
+            assertThat(bucket.tryConsume()).isFalse();
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task11/TokenBucketConcurrencyTest.java -->
+**[`TokenBucketConcurrencyTest.java`](../src/test/java/io/github/chris013/practice/task11/TokenBucketConcurrencyTest.java)**
+
+```java
+package io.github.chris013.practice.task11;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.RepeatedTest;
+
+/**
+ * Time is frozen, so the only thing that can change the result is the race between threads. Each attempt is
+ * started by a shared gate, so all of them hit the bucket at the same moment.
+ */
+class TokenBucketConcurrencyTest {
+
+    private static final int CAPACITY = 1_000;
+    private static final int ATTEMPTS = 50_000;
+
+    private final MutableInstantSource time = new MutableInstantSource(Instant.parse("2026-01-01T12:00:00Z"));
+
+    @RepeatedTest(5)
+    void exactly_capacity_requests_succeed_when_virtual_threads_race_for_the_tokens() {
+        TokenBucket bucket = new TokenBucket(CAPACITY, 1, Duration.ofSeconds(1), time);
+        AtomicInteger granted = new AtomicInteger();
+        CountDownLatch startGate = new CountDownLatch(1);
+
+        // close() waits until every task has finished.
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int i = 0; i < ATTEMPTS; i++) {
+                executor.execute(() -> {
+                    awaitQuietly(startGate);
+                    if (bucket.tryConsume()) {
+                        granted.incrementAndGet();
+                    }
+                });
+            }
+            startGate.countDown();
+        }
+
+        assertThat(granted).hasValue(CAPACITY);
+        assertThat(bucket.availableTokens()).isZero();
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while waiting for the start gate", e);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task11/RateLimiterTest.java -->
+**[`RateLimiterTest.java`](../src/test/java/io/github/chris013/practice/task11/RateLimiterTest.java)**
+
+```java
+package io.github.chris013.practice.task11;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class RateLimiterTest {
+
+    private static final Instant START = Instant.parse("2026-01-01T12:00:00Z");
+    private static final Duration PERIOD = Duration.ofSeconds(1);
+
+    private final MutableInstantSource time = new MutableInstantSource(START);
+
+    @Test
+    void each_key_gets_its_own_bucket() {
+        RateLimiter<String> limiter = new RateLimiter<>(2, 1, PERIOD, time);
+
+        assertThat(limiter.tryAcquire("alice")).isTrue();
+        assertThat(limiter.tryAcquire("alice")).isTrue();
+        assertThat(limiter.tryAcquire("alice")).isFalse();
+
+        assertThat(limiter.tryAcquire("bob")).isTrue();
+        assertThat(limiter.availableTokens("alice")).isZero();
+        assertThat(limiter.availableTokens("bob")).isEqualTo(1);
+    }
+
+    @Test
+    void a_key_we_have_never_seen_has_full_capacity() {
+        RateLimiter<String> limiter = new RateLimiter<>(7, 1, PERIOD, time);
+
+        assertThat(limiter.availableTokens("nobody")).isEqualTo(7);
+    }
+
+    @Test
+    void each_key_refills_on_its_own_schedule() {
+        RateLimiter<String> limiter = new RateLimiter<>(1, 1, PERIOD, time);
+        limiter.tryAcquire("alice"); // alice's clock starts at 0 s
+
+        time.advance(Duration.ofMillis(500));
+        limiter.tryAcquire("bob"); // bob's clock starts at 0.5 s
+
+        time.advance(Duration.ofMillis(500)); // now 1 s
+        assertThat(limiter.availableTokens("alice")).isEqualTo(1);
+        assertThat(limiter.availableTokens("bob")).isZero();
+    }
+
+    @Test
+    void rejects_null_keys() {
+        RateLimiter<String> limiter = new RateLimiter<>(1, 1, PERIOD, time);
+
+        assertThatThrownBy(() -> limiter.tryAcquire(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("key");
+    }
+
+    @Test
+    void rejects_invalid_limits_when_it_is_built() {
+        assertThatThrownBy(() -> new RateLimiter<String>(0, 1, PERIOD, time))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RateLimiter<String>(1, 1, Duration.ZERO, time))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Nested
+    class Concurrency {
+
+        @Test
+        void ten_thousand_first_requests_for_one_new_key_create_exactly_one_bucket() {
+            int capacity = 100;
+            RateLimiter<String> limiter = new RateLimiter<>(capacity, 10, PERIOD, time);
+            AtomicInteger granted = new AtomicInteger();
+            CountDownLatch startGate = new CountDownLatch(1);
+
+            try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (int i = 0; i < 10_000; i++) {
+                    executor.execute(() -> {
+                        awaitQuietly(startGate);
+                        if (limiter.tryAcquire("parcel-api-key")) {
+                            granted.incrementAndGet();
+                        }
+                    });
+                }
+                startGate.countDown();
+            }
+
+            // If two buckets had been created for the key, each would hand out its own 100 tokens.
+            assertThat(granted).hasValue(capacity);
+            assertThat(limiter.availableTokens("parcel-api-key")).isZero();
+        }
+
+        private static void awaitQuietly(CountDownLatch latch) {
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted while waiting for the start gate", e);
+            }
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -220,9 +643,198 @@ Both versions are correct. The difference:
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task11/TokenBucket.java -->
+**[`TokenBucket.java`](../solutions/src/main/java/io/github/chris013/practice/task11/TokenBucket.java)**
+
+```java
+package io.github.chris013.practice.task11;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.InstantSource;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * A token bucket: holds up to {@code capacity} tokens and gets {@code refillTokens} back every full
+ * {@code refillPeriod}. A request takes its tokens from the bucket or is refused.
+ *
+ * <p>The refill is done in whole periods and in integers only. The refill clock only moves forward by whole
+ * periods, so the part of a period that has not finished yet is kept for the next call and no time is lost.
+ *
+ * <p>Thread safety: all state lives in one immutable {@link State} object held by an {@link AtomicReference}.
+ * {@link #tryConsume(long)} is a compare-and-set loop, so it never blocks and never loses an update.
+ */
+public final class TokenBucket {
+
+    private final long capacity;
+    private final long refillTokens;
+    private final Duration refillPeriod;
+    private final InstantSource time;
+    private final AtomicReference<State> state;
+
+    /**
+     * Creates a bucket that starts full.
+     *
+     * @throws IllegalArgumentException if {@code capacity} or {@code refillTokens} is below 1, or {@code refillPeriod}
+     *     is not positive
+     * @throws NullPointerException if {@code refillPeriod} or {@code time} is null
+     */
+    public TokenBucket(long capacity, long refillTokens, Duration refillPeriod, InstantSource time) {
+        if (capacity < 1) {
+            throw new IllegalArgumentException("capacity must be at least 1, was " + capacity);
+        }
+        if (refillTokens < 1) {
+            throw new IllegalArgumentException("refillTokens must be at least 1, was " + refillTokens);
+        }
+        Objects.requireNonNull(refillPeriod, "refillPeriod");
+        if (refillPeriod.isZero() || refillPeriod.isNegative()) {
+            throw new IllegalArgumentException("refillPeriod must be positive, was " + refillPeriod);
+        }
+        this.capacity = capacity;
+        this.refillTokens = refillTokens;
+        this.refillPeriod = refillPeriod;
+        this.time = Objects.requireNonNull(time, "time");
+        this.state = new AtomicReference<>(new State(capacity, time.instant()));
+    }
+
+    /** Takes one token if there is one. Same as {@code tryConsume(1)}. */
+    public boolean tryConsume() {
+        return tryConsume(1);
+    }
+
+    /**
+     * Takes {@code tokens} tokens if there are that many after the refill. Otherwise takes nothing and returns false.
+     *
+     * @throws IllegalArgumentException if {@code tokens} is below 1 or above the capacity
+     */
+    public boolean tryConsume(long tokens) {
+        if (tokens < 1 || tokens > capacity) {
+            throw new IllegalArgumentException("tokens must be between 1 and " + capacity + ", was " + tokens);
+        }
+        // Read the clock once per attempt. On a retry we reuse this instant: the state we see may have been
+        // refilled by another thread with a later reading, and refreshed() treats that as "no time passed".
+        Instant now = time.instant();
+        while (true) {
+            State current = state.get();
+            State refreshed = refreshed(current, now);
+            if (refreshed.tokens() < tokens) {
+                return false; // refused: nothing is written, so nothing is taken
+            }
+            State next = new State(refreshed.tokens() - tokens, refreshed.refilledAt());
+            // compareAndSet succeeds only if no other thread changed the state since we read it. If one did, we
+            // start again from the new state.
+            if (state.compareAndSet(current, next)) {
+                return true;
+            }
+        }
+    }
+
+    /** The number of tokens available right now, after applying the refill up to the current instant. */
+    public long availableTokens() {
+        return refreshed(state.get(), time.instant()).tokens();
+    }
+
+    /**
+     * Returns the state as it would be at {@code now}, with the refill applied. Never changes {@code current}.
+     */
+    private State refreshed(State current, Instant now) {
+        if (now.isBefore(current.refilledAt())) {
+            // The clock went backwards. Treat it as zero time elapsed so tokens are neither added nor removed.
+            return current;
+        }
+        if (current.tokens() >= capacity) {
+            // A full bucket has nothing to refill. Its refill clock starts now, so that after spending from it the
+            // next refill comes one full period later.
+            return new State(capacity, now);
+        }
+        long periods;
+        try {
+            periods = Duration.between(current.refilledAt(), now).dividedBy(refillPeriod);
+        } catch (ArithmeticException tooManyToCount) {
+            periods = Long.MAX_VALUE; // any such number fills the bucket
+        }
+        if (periods == 0) {
+            return current;
+        }
+        long missing = capacity - current.tokens();
+        if (periods >= Math.ceilDiv(missing, refillTokens)) {
+            // Enough periods passed to fill the bucket. It is full now, so the refill clock starts now.
+            return new State(capacity, now);
+        }
+        // Fewer periods than needed to fill the bucket: no overflow is possible, and the refill clock moves forward
+        // by whole periods only. The part of the current period that is still running is kept.
+        return new State(
+                current.tokens() + periods * refillTokens,
+                current.refilledAt().plus(refillPeriod.multipliedBy(periods)));
+    }
+
+    /**
+     * An immutable snapshot of the bucket.
+     *
+     * @param tokens     tokens in the bucket as of {@code refilledAt}
+     * @param refilledAt the point up to which whole refill periods have been counted
+     */
+    private record State(long tokens, Instant refilledAt) {
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task11/RateLimiter.java -->
+**[`RateLimiter.java`](../solutions/src/main/java/io/github/chris013/practice/task11/RateLimiter.java)**
+
+```java
+package io.github.chris013.practice.task11;
+
+import java.time.Duration;
+import java.time.InstantSource;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
+
+/**
+ * One {@link TokenBucket} per key, for example one per API key. A bucket is created the first time its key is seen.
+ *
+ * <p>Buckets are never removed. That is fine for a few thousand API keys. For more, see the stretch goals.
+ */
+public final class RateLimiter<K> {
+
+    private final long capacity;
+    private final Supplier<TokenBucket> newBucket;
+    private final Map<K, TokenBucket> buckets = new ConcurrentHashMap<>();
+
+    /**
+     * Every key gets a bucket with these settings.
+     *
+     * @throws IllegalArgumentException if {@code capacity} or {@code refillTokens} is below 1, or {@code refillPeriod}
+     *     is not positive
+     * @throws NullPointerException if {@code refillPeriod} or {@code time} is null
+     */
+    public RateLimiter(long capacity, long refillTokens, Duration refillPeriod, InstantSource time) {
+        this.capacity = capacity;
+        this.newBucket = () -> new TokenBucket(capacity, refillTokens, refillPeriod, time);
+        // Build one bucket now, so bad arguments fail at construction and not on the first request.
+        newBucket.get();
+    }
+
+    /**
+     * Takes one token from the bucket of {@code key}, creating that bucket if this is the key's first request.
+     */
+    public boolean tryAcquire(K key) {
+        Objects.requireNonNull(key, "key");
+        // computeIfAbsent runs the factory at most once per key, even under contention. A get-then-put would let two
+        // threads each create a bucket, and one of them would then be thrown away together with its tokens.
+        return buckets.computeIfAbsent(key, k -> newBucket.get()).tryConsume();
+    }
+
+    /** Tokens left for {@code key}. A key we have never seen has a full bucket, and asking does not create one. */
+    public long availableTokens(K key) {
+        TokenBucket bucket = buckets.get(Objects.requireNonNull(key, "key"));
+        return bucket == null ? capacity : bucket.availableTokens();
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

@@ -218,9 +218,533 @@ The starter fails all of these tests, because every method throws `UnsupportedOp
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task14/FeatureFlagsTest.java -->
+**[`FeatureFlagsTest.java`](../src/test/java/io/github/chris013/practice/task14/FeatureFlagsTest.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+import java.util.stream.IntStream;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class FeatureFlagsTest {
+
+    private static final EvaluationContext ALICE = EvaluationContext.user("alice", "DE");
+    private static final EvaluationContext BOB = EvaluationContext.user("bob", "FR");
+    private static final EvaluationContext CAROL = EvaluationContext.user("carol", null);
+    private static final EvaluationContext ANONYMOUS = EvaluationContext.anonymous(null);
+
+    @Nested
+    class Parsing {
+
+        @Test
+        void ignores_comments_and_blank_lines() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    # rollout plan for March
+
+                    # the kill switch lives in the ops runbook
+                    flag dark-mode
+                      # indented comments are comments too
+                      default on
+
+                    """);
+
+            assertThat(flags.isEnabled("dark-mode", ANONYMOUS)).isTrue();
+        }
+
+        @Test
+        void reads_several_flags() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                    flag dark-mode
+                      default on
+                    flag legacy-export
+                      off
+                    """);
+
+            assertThat(flags.flagNames()).containsExactly("new-checkout", "dark-mode", "legacy-export");
+        }
+
+        @Test
+        void lists_flag_names_in_the_order_they_are_written() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag zeta
+                      off
+                    flag alpha
+                      default on
+                    flag mid
+                      users alice
+                    """);
+
+            assertThat(flags.flagNames()).containsExactly("zeta", "alpha", "mid");
+        }
+
+        @Test
+        void an_empty_configuration_has_no_flags() {
+            FeatureFlags flags = FeatureFlags.parse("# nothing yet\n\n");
+
+            assertThat(flags.flagNames()).isEmpty();
+        }
+
+        @Test
+        void accepts_flag_names_with_digits_and_hyphens() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag v2-checkout-3
+                      default on
+                    """);
+
+            assertThat(flags.isEnabled("v2-checkout-3", ANONYMOUS)).isTrue();
+        }
+
+        @Test
+        void accepts_tab_indented_rules() {
+            FeatureFlags flags = FeatureFlags.parse("flag dark-mode\n\tdefault on");
+
+            assertThat(flags.isEnabled("dark-mode", ANONYMOUS)).isTrue();
+        }
+
+        @Test
+        void a_flag_without_any_rule_is_off() {
+            FeatureFlags flags = FeatureFlags.parse("flag empty-flag");
+
+            assertThat(flags.isEnabled("empty-flag", ALICE)).isFalse();
+        }
+
+        @Test
+        void rejects_a_null_configuration() {
+            assertThatThrownBy(() -> FeatureFlags.parse(null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Users {
+
+        private final FeatureFlags flags = FeatureFlags.parse("""
+                flag new-checkout
+                  users alice, bob
+                """);
+
+        @Test
+        void is_on_for_each_listed_user() {
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", BOB)).isTrue();
+        }
+
+        @Test
+        void is_off_for_other_users() {
+            assertThat(flags.isEnabled("new-checkout", CAROL)).isFalse();
+        }
+
+        @Test
+        void never_matches_anonymous_visitors() {
+            assertThat(flags.isEnabled("new-checkout", ANONYMOUS)).isFalse();
+        }
+
+        @Test
+        void matches_user_ids_exactly() {
+            assertThat(flags.isEnabled("new-checkout", EvaluationContext.user("Alice", "DE"))).isFalse();
+        }
+    }
+
+    @Nested
+    class Countries {
+
+        private final FeatureFlags flags = FeatureFlags.parse("""
+                flag new-checkout
+                  countries DE, AT
+                """);
+
+        @Test
+        void is_on_for_users_from_a_listed_country() {
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", EvaluationContext.user("dora", "AT"))).isTrue();
+        }
+
+        @Test
+        void is_off_for_users_from_other_countries() {
+            assertThat(flags.isEnabled("new-checkout", BOB)).isFalse();
+        }
+
+        @Test
+        void does_not_match_when_the_country_is_unknown() {
+            assertThat(flags.isEnabled("new-checkout", CAROL)).isFalse();
+        }
+
+        @Test
+        void also_matches_anonymous_visitors_by_country() {
+            assertThat(flags.isEnabled("new-checkout", EvaluationContext.anonymous("DE"))).isTrue();
+            assertThat(flags.isEnabled("new-checkout", EvaluationContext.anonymous("CH"))).isFalse();
+        }
+    }
+
+    @Nested
+    class Percent {
+
+        private static final String FLAG = "new-checkout";
+
+        private static FeatureFlags withPercent(int percent) {
+            return FeatureFlags.parse("flag " + FLAG + "\n  percent " + percent);
+        }
+
+        private static List<EvaluationContext> users(int count) {
+            return IntStream.range(0, count)
+                    .mapToObj(i -> EvaluationContext.user("user-" + i, "DE"))
+                    .toList();
+        }
+
+        @Test
+        void zero_percent_matches_nobody() {
+            FeatureFlags flags = withPercent(0);
+
+            assertThat(users(1_000)).noneMatch(user -> flags.isEnabled(FLAG, user));
+        }
+
+        @Test
+        void hundred_percent_matches_every_known_user() {
+            FeatureFlags flags = withPercent(100);
+
+            assertThat(users(1_000)).allMatch(user -> flags.isEnabled(FLAG, user));
+        }
+
+        @Test
+        void anonymous_visitors_never_match_a_percentage() {
+            assertThat(withPercent(100).isEnabled(FLAG, ANONYMOUS)).isFalse();
+        }
+
+        @Test
+        void roughly_the_configured_share_of_users_is_on() {
+            FeatureFlags flags = withPercent(50);
+
+            long on = users(10_000).stream().filter(user -> flags.isEnabled(FLAG, user)).count();
+
+            assertThat(on).isBetween(4_700L, 5_300L);
+        }
+
+        @Test
+        void the_same_user_gets_the_same_answer_every_time() {
+            FeatureFlags first = withPercent(50);
+            FeatureFlags second = withPercent(50);
+
+            for (EvaluationContext user : users(1_000)) {
+                boolean answer = first.isEnabled(FLAG, user);
+                assertThat(first.isEnabled(FLAG, user)).isEqualTo(answer);
+                assertThat(second.isEnabled(FLAG, user)).isEqualTo(answer);
+            }
+        }
+
+        @Test
+        void a_user_on_at_25_percent_is_still_on_at_50_percent() {
+            FeatureFlags at25 = withPercent(25);
+            FeatureFlags at50 = withPercent(50);
+
+            for (EvaluationContext user : users(10_000)) {
+                if (at25.isEnabled(FLAG, user)) {
+                    assertThat(at50.isEnabled(FLAG, user)).as(user.userId().orElseThrow()).isTrue();
+                }
+            }
+        }
+
+        @Test
+        void a_user_is_on_exactly_when_their_bucket_is_below_the_percentage() {
+            FeatureFlags flags = withPercent(25);
+
+            for (EvaluationContext user : users(1_000)) {
+                String userId = user.userId().orElseThrow();
+                // The bucket formula is part of the contract: the flag name and the user id are hashed together.
+                boolean expected = Math.floorMod((FLAG + ":" + userId).hashCode(), 100) < 25;
+                assertThat(flags.isEnabled(FLAG, user)).as(userId).isEqualTo(expected);
+            }
+        }
+
+        @Test
+        void different_flags_split_the_users_differently() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      percent 50
+                    flag dark-mode
+                      percent 50
+                    """);
+
+            long differing = users(1_000).stream()
+                    .filter(user -> flags.isEnabled(FLAG, user) != flags.isEnabled("dark-mode", user))
+                    .count();
+
+            assertThat(differing).isGreaterThan(0);
+        }
+    }
+
+    @Nested
+    class Defaults {
+
+        @Test
+        void the_default_is_off_when_it_is_not_written() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                    """);
+
+            assertThat(flags.isEnabled("new-checkout", BOB)).isFalse();
+        }
+
+        @Test
+        void default_on_applies_when_no_rule_matches() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                      default on
+                    """);
+
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", BOB)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", ANONYMOUS)).isTrue();
+        }
+
+        @Test
+        void default_off_can_be_written_explicitly() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                      default off
+                    """);
+
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", BOB)).isFalse();
+        }
+
+        @Test
+        void a_flag_with_only_a_default_is_on_for_everyone() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag dark-mode
+                      default on
+                    """);
+
+            assertThat(flags.isEnabled("dark-mode", ANONYMOUS)).isTrue();
+            assertThat(flags.isEnabled("dark-mode", CAROL)).isTrue();
+        }
+    }
+
+    @Nested
+    class KillSwitch {
+
+        @Test
+        void off_turns_the_flag_off_for_everyone_whatever_the_other_lines_say() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                      countries DE
+                      percent 100
+                      default on
+                      off
+                    """);
+
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isFalse();
+            assertThat(flags.isEnabled("new-checkout", BOB)).isFalse();
+            assertThat(flags.isEnabled("new-checkout", ANONYMOUS)).isFalse();
+        }
+
+        @Test
+        void off_works_when_it_is_written_first() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      off
+                      default on
+                    """);
+
+            assertThat(flags.isEnabled("new-checkout", BOB)).isFalse();
+        }
+
+        @Test
+        void off_only_affects_its_own_flag() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag legacy-export
+                      off
+                    flag dark-mode
+                      default on
+                    """);
+
+            assertThat(flags.isEnabled("legacy-export", ALICE)).isFalse();
+            assertThat(flags.isEnabled("dark-mode", ALICE)).isTrue();
+        }
+    }
+
+    @Nested
+    class RuleOrder {
+
+        @Test
+        void a_flag_is_on_when_any_rule_matches_wherever_the_rule_is_written() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                      countries FR
+                    """);
+
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", BOB)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", CAROL)).isFalse();
+        }
+
+        @Test
+        void reversing_the_rules_does_not_change_any_answer() {
+            FeatureFlags forward = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                      countries FR
+                      percent 30
+                    """);
+            FeatureFlags backward = FeatureFlags.parse("""
+                    flag new-checkout
+                      percent 30
+                      countries FR
+                      users alice
+                    """);
+
+            for (EvaluationContext user : List.of(ALICE, BOB, CAROL, ANONYMOUS)) {
+                assertThat(backward.isEnabled("new-checkout", user))
+                        .isEqualTo(forward.isEnabled("new-checkout", user));
+            }
+        }
+
+        @Test
+        void the_default_applies_only_when_no_rule_matched() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      users alice
+                      default off
+                      countries FR
+                    """);
+
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", BOB)).isTrue();
+            assertThat(flags.isEnabled("new-checkout", CAROL)).isFalse();
+        }
+    }
+
+    @Nested
+    class UnknownFlag {
+
+        @Test
+        void an_unknown_flag_is_off_for_everyone() {
+            FeatureFlags flags = FeatureFlags.parse("""
+                    flag new-checkout
+                      default on
+                    """);
+
+            assertThat(flags.isEnabled("missing-flag", ALICE)).isFalse();
+            assertThat(flags.isEnabled("missing-flag", ANONYMOUS)).isFalse();
+        }
+
+        @Test
+        void every_flag_is_unknown_in_an_empty_configuration() {
+            FeatureFlags flags = FeatureFlags.parse("");
+
+            assertThat(flags.isEnabled("new-checkout", ALICE)).isFalse();
+        }
+
+        @Test
+        void a_null_flag_name_is_a_programming_error_not_an_unknown_flag() {
+            FeatureFlags flags = FeatureFlags.parse("");
+
+            assertThatThrownBy(() -> flags.isEnabled(null, ALICE)).isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class EvaluationContexts {
+
+        @Test
+        void a_user_has_an_id_and_may_have_an_unknown_country() {
+            EvaluationContext carol = EvaluationContext.user("carol", null);
+
+            assertThat(carol.userId()).contains("carol");
+            assertThat(carol.country()).isEmpty();
+        }
+
+        @Test
+        void an_anonymous_visitor_has_no_user_id() {
+            EvaluationContext visitor = EvaluationContext.anonymous("DE");
+
+            assertThat(visitor.userId()).isEmpty();
+            assertThat(visitor.country()).contains("DE");
+        }
+
+        @Test
+        void an_anonymous_visitor_may_have_no_country() {
+            assertThat(EvaluationContext.anonymous(null).country()).isEmpty();
+        }
+
+        @Test
+        void a_user_needs_an_id_that_is_not_blank() {
+            assertThatThrownBy(() -> EvaluationContext.user(null, "DE")).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> EvaluationContext.user("  ", "DE")).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task14/FlagConfigurationErrorsTest.java -->
+**[`FlagConfigurationErrorsTest.java`](../src/test/java/io/github/chris013/practice/task14/FlagConfigurationErrorsTest.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+/**
+ * Every invalid input must fail with the right line number and a message that says what is wrong. In the tables
+ * below, {@code ~} stands for a line break, and the leading spaces of an indented line are kept as written.
+ */
+class FlagConfigurationErrorsTest {
+
+    @ParameterizedTest
+    @CsvSource(quoteCharacter = '"', delimiter = '|', ignoreLeadingAndTrailingWhitespace = false, value = {
+        "  percent 10|1|appears before any flag",
+        "# only a comment~  percent 5|2|appears before any flag",
+        "flag a~  percentage 10|2|unknown keyword 'percentage'",
+        "flag a~  Percent 5|2|unknown keyword 'Percent'",
+        "flag a~  percent 5~  users alice~  bogus|4|unknown keyword 'bogus'",
+        "flag a~  percent 120|2|percent must be between 0 and 100 but was 120",
+        "flag a~  percent -1|2|percent must be between 0 and 100 but was -1",
+        "flag one~  default on~~flag two~  percent 101|5|percent must be between 0 and 100 but was 101",
+        "flag a~  percent fifty|2|percent must be a whole number but was 'fifty'",
+        "flag a~  percent|2|percent needs a number",
+        "flag Bad|1|invalid flag name 'Bad'",
+        "flag -a|1|invalid flag name '-a'",
+        "flag a-|1|invalid flag name 'a-'",
+        "flag|1|flag needs a name",
+        "flag a~flag a|2|duplicate flag 'a'",
+        "flag a~  default on~  default off|3|default is already set for flag 'a'",
+        "flag a~  default maybe|2|default must be on or off but was 'maybe'",
+        "flag a~  countries de|2|country must be two uppercase letters but was 'de'",
+        "flag a~  countries DE,at|2|two uppercase letters but was 'at'",
+        "flag a~  countries|2|countries needs at least one value",
+        "flag a~  users|2|users needs at least one value",
+        "flag a~  users alice,,bob|2|empty entry in users list",
+        "flag a~  users alice,|2|empty entry in users list",
+        "flag a~  off now|2|'off' takes no value but found 'now'",
+        "flag a~  flag b|2|flag lines must not be indented",
+        "flag a~percent 5|2|expected 'flag <name>' at the start of a line but found 'percent'"
+    })
+    void rejects_invalid_configuration_with_its_line_number(String configuration, int line, String messageFragment) {
+        String text = configuration.replace('~', '\n');
+
+        assertThatThrownBy(() -> FeatureFlags.parse(text))
+                .isInstanceOfSatisfying(FlagConfigurationException.class, e -> {
+                    assertThat(e.lineNumber()).isEqualTo(line);
+                    assertThat(e.getMessage()).startsWith("line " + line + ": ").contains(messageFragment);
+                });
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -273,21 +797,405 @@ It would not be safe when the default answer must not be silent. For a flag that
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/FeatureFlags.java -->
+**[`FeatureFlags.java`](../solutions/src/main/java/io/github/chris013/practice/task14/FeatureFlags.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+/**
+ * Answers one question for the whole shop: is this flag on for this user?
+ *
+ * <p>Callers never see rules, parsers or hashing. They parse a configuration once, keep the instance, and ask
+ * {@link #isEnabled}. The instance is immutable, so it can be shared between request threads.
+ *
+ * <p>Task 14: read {@code tasks/14-feature-flags-deep-module.md} first.
+ */
+public final class FeatureFlags {
+
+    private final Map<String, Flag> flags;
+
+    private FeatureFlags(Map<String, Flag> flags) {
+        this.flags = flags;
+    }
+
+    /**
+     * Parses a configuration text in the line-based format described in the task.
+     *
+     * @throws FlagConfigurationException if the text is invalid; the message starts with {@code line <n>: }
+     */
+    public static FeatureFlags parse(String configuration) {
+        Objects.requireNonNull(configuration, "configuration");
+        return new FeatureFlags(FlagConfigParser.parse(configuration));
+    }
+
+    /**
+     * Returns whether the flag is on for this context. An unknown flag name returns {@code false}.
+     *
+     * <p>That is a deliberate choice: a flag that nobody has written down is, for every practical purpose, a flag
+     * that is off. Callers never need a try/catch around a flag check. The trade-off is that a typo in a flag name
+     * fails silently, so tests should cover the flag names they depend on.
+     */
+    public boolean isEnabled(String flagName, EvaluationContext context) {
+        Objects.requireNonNull(flagName, "flagName");
+        Objects.requireNonNull(context, "context");
+        Flag flag = flags.get(flagName);
+        return flag != null && flag.isOnFor(context);
+    }
+
+    /**
+     * The names of all flags in the configuration, in the order they are written. The set cannot be modified.
+     */
+    public Set<String> flagNames() {
+        return Collections.unmodifiableSet(flags.keySet());
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/EvaluationContext.java -->
+**[`EvaluationContext.java`](../solutions/src/main/java/io/github/chris013/practice/task14/EvaluationContext.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * Who is asking: a known user, possibly with a country, or an anonymous visitor with a country.
+ *
+ * <p>This is a final class and not a record on purpose: a record would expose a canonical constructor that takes
+ * nullable values or {@code Optional}s, and callers would have two ways to say the same thing. Two named factories
+ * say exactly what the situation is. The private constructor is the only place where nulls are stored.
+ */
+public final class EvaluationContext {
+
+    private final String userId;
+    private final String country;
+
+    private EvaluationContext(String userId, String country) {
+        this.userId = userId;
+        this.country = country;
+    }
+
+    /** A known user. The user id must not be blank; the country may be {@code null} when it is unknown. */
+    public static EvaluationContext user(String userId, String country) {
+        Objects.requireNonNull(userId, "userId");
+        if (userId.isBlank()) {
+            throw new IllegalArgumentException("userId must not be blank");
+        }
+        return new EvaluationContext(userId, country);
+    }
+
+    /** An anonymous visitor. The country may be {@code null} when it is unknown. */
+    public static EvaluationContext anonymous(String country) {
+        return new EvaluationContext(null, country);
+    }
+
+    /** The user id, or empty for an anonymous visitor. */
+    public Optional<String> userId() {
+        return Optional.ofNullable(userId);
+    }
+
+    /** The ISO 3166-1 alpha-2 country code, or empty when unknown. */
+    public Optional<String> country() {
+        return Optional.ofNullable(country);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/FlagConfigParser.java -->
+**[`FlagConfigParser.java`](../solutions/src/main/java/io/github/chris013/practice/task14/FlagConfigParser.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.regex.Pattern;
+
+/**
+ * Turns configuration text into {@link Flag}s. This is the only code that knows the file format, and the only code
+ * that knows line numbers, so every error is reported here, next to the line that caused it.
+ *
+ * <p>The parser works line by line. A non-indented line starts a flag; an indented line is a rule of the current
+ * flag. Each line is split into a keyword and the rest, and the keyword decides what the line means. That is easier
+ * to read and to get right than one regular expression for the whole grammar.
+ */
+final class FlagConfigParser {
+
+    private static final Pattern FLAG_NAME = Pattern.compile("[a-z0-9]+(-[a-z0-9]+)*");
+    private static final Pattern COUNTRY_CODE = Pattern.compile("[A-Z]{2}");
+
+    private final Map<String, FlagDraft> drafts = new LinkedHashMap<>();
+    private FlagDraft current;
+    private int lineNumber;
+
+    private FlagConfigParser() {
+    }
+
+    static Map<String, Flag> parse(String configuration) {
+        FlagConfigParser parser = new FlagConfigParser();
+        // \R matches \n, \r\n and the other line terminators; -1 keeps trailing empty lines.
+        String[] lines = configuration.split("\\R", -1);
+        for (int i = 0; i < lines.length; i++) {
+            parser.lineNumber = i + 1;
+            parser.parseLine(lines[i]);
+        }
+        Map<String, Flag> flags = new LinkedHashMap<>();
+        for (FlagDraft draft : parser.drafts.values()) {
+            flags.put(draft.name, draft.build());
+        }
+        return Collections.unmodifiableMap(flags);
+    }
+
+    private void parseLine(String line) {
+        String text = line.strip();
+        if (text.isEmpty() || text.startsWith("#")) {
+            return;
+        }
+        if (line.startsWith(" ") || line.startsWith("\t")) {
+            parseRule(text);
+        } else {
+            parseFlagHeader(text);
+        }
+    }
+
+    private void parseFlagHeader(String text) {
+        Words words = Words.of(text);
+        if (!words.keyword().equals("flag")) {
+            throw error("expected 'flag <name>' at the start of a line but found '" + words.keyword() + "'");
+        }
+        String name = words.argument();
+        if (name.isEmpty()) {
+            throw error("flag needs a name");
+        }
+        if (!FLAG_NAME.matcher(name).matches()) {
+            throw error("invalid flag name '" + name + "'");
+        }
+        if (drafts.containsKey(name)) {
+            throw error("duplicate flag '" + name + "'");
+        }
+        current = new FlagDraft(name);
+        drafts.put(name, current);
+    }
+
+    private void parseRule(String text) {
+        Words words = Words.of(text);
+        if (current == null) {
+            throw error("rule '" + words.keyword() + "' appears before any flag");
+        }
+        String argument = words.argument();
+        switch (words.keyword()) {
+            case "users" -> current.rules.add(new UserRule(listOf("users", argument)));
+            case "countries" -> current.rules.add(new CountryRule(countryCodes(argument)));
+            case "percent" -> current.rules.add(new PercentRule(current.name, percent(argument)));
+            case "default" -> setDefault(argument);
+            case "off" -> killSwitch(argument);
+            case "flag" -> throw error("flag lines must not be indented");
+            default -> throw error("unknown keyword '" + words.keyword() + "'");
+        }
+    }
+
+    private void setDefault(String argument) {
+        if (current.defaultSet) {
+            throw error("default is already set for flag '" + current.name + "'");
+        }
+        current.defaultSet = true;
+        current.defaultOn = switch (argument) {
+            case "on" -> true;
+            case "off" -> false;
+            default -> throw error("default must be on or off but was '" + argument + "'");
+        };
+    }
+
+    private void killSwitch(String argument) {
+        if (!argument.isEmpty()) {
+            throw error("'off' takes no value but found '" + argument + "'");
+        }
+        current.killSwitch = true;
+    }
+
+    private List<String> countryCodes(String argument) {
+        List<String> codes = listOf("countries", argument);
+        for (String code : codes) {
+            if (!COUNTRY_CODE.matcher(code).matches()) {
+                throw error("country must be two uppercase letters but was '" + code + "'");
+            }
+        }
+        return codes;
+    }
+
+    private int percent(String argument) {
+        if (argument.isEmpty()) {
+            throw error("percent needs a number");
+        }
+        int value;
+        try {
+            value = Integer.parseInt(argument);
+        } catch (NumberFormatException e) {
+            throw error("percent must be a whole number but was '" + argument + "'");
+        }
+        if (value < 0 || value > 100) {
+            throw error("percent must be between 0 and 100 but was " + value);
+        }
+        return value;
+    }
+
+    /** Splits a comma-separated argument. Every entry must be present; "a,,b" is an error, not a silent skip. */
+    private List<String> listOf(String keyword, String argument) {
+        if (argument.isEmpty()) {
+            throw error(keyword + " needs at least one value");
+        }
+        List<String> values = new ArrayList<>();
+        for (String raw : argument.split(",", -1)) {
+            String value = raw.strip();
+            if (value.isEmpty()) {
+                throw error("empty entry in " + keyword + " list");
+            }
+            values.add(value);
+        }
+        return values;
+    }
+
+    private FlagConfigurationException error(String detail) {
+        return new FlagConfigurationException(lineNumber, detail);
+    }
+
+    /** The first word of a line and the rest of it, trimmed. */
+    private record Words(String keyword, String argument) {
+
+        static Words of(String text) {
+            String[] parts = text.split("\\s+", 2);
+            return new Words(parts[0], parts.length == 2 ? parts[1].strip() : "");
+        }
+    }
+
+    /** A flag while its lines are still being read. Turned into an immutable {@link Flag} at the end. */
+    private static final class FlagDraft {
+
+        private final String name;
+        private final List<Rule> rules = new ArrayList<>();
+        private boolean killSwitch;
+        private boolean defaultSet;
+        private boolean defaultOn;
+
+        FlagDraft(String name) {
+            this.name = name;
+        }
+
+        Flag build() {
+            return new Flag(killSwitch, defaultOn, rules);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/Flag.java -->
+**[`Flag.java`](../solutions/src/main/java/io/github/chris013/practice/task14/Flag.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+import java.util.List;
+
+/**
+ * One parsed flag: a kill switch, a default, and rules in the order they were written.
+ *
+ * <p>The kill switch is checked first, so it wins over everything else, wherever it appears in the block. Then the
+ * rules are tried top to bottom; the first one that matches turns the flag on. Only if none matches does the
+ * default apply.
+ */
+record Flag(boolean killSwitch, boolean defaultOn, List<Rule> rules) {
+
+    Flag {
+        rules = List.copyOf(rules);
+    }
+
+    boolean isOnFor(EvaluationContext context) {
+        if (killSwitch) {
+            return false;
+        }
+        for (Rule rule : rules) {
+            if (rule.matches(context)) {
+                return true;
+            }
+        }
+        return defaultOn;
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/Rule.java -->
+**[`Rule.java`](../solutions/src/main/java/io/github/chris013/practice/task14/Rule.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+/**
+ * One condition that turns a flag on. The set of rule kinds is closed and known at compile time, so this is a sealed
+ * interface: a {@code switch} over it can be checked by the compiler, and nobody outside the package can add a kind.
+ */
+sealed interface Rule permits UserRule, CountryRule, PercentRule {
+
+    /** Whether this rule turns the flag on for the context. */
+    boolean matches(EvaluationContext context);
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task14/PercentRule.java -->
+**[`PercentRule.java`](../solutions/src/main/java/io/github/chris013/practice/task14/PercentRule.java)**
+
+```java
+package io.github.chris013.practice.task14;
+
+import java.util.Objects;
+
+/**
+ * {@code percent 25}: on for the users whose bucket is below 25.
+ *
+ * <p>A bucket is a number from 0 to 99 that is fixed for one flag and one user. We hash the flag name together with
+ * the user id. Without the flag name, the same users would be first in line for every rollout, and a feature at 10
+ * percent would always be the same 10 percent of users as every other one. {@link String#hashCode()} is specified by
+ * the JLS, so the bucket is the same on every JVM. A random number generator is not an option: users would flip
+ * between variants on every page load.
+ *
+ * <p>Anonymous visitors have no stable identity, so they never match: a rollout by percentage must not flip a visitor
+ * in and out of the feature between page loads.
+ */
+record PercentRule(String flagName, int percent) implements Rule {
+
+    private static final int BUCKETS = 100;
+
+    PercentRule {
+        Objects.requireNonNull(flagName, "flagName");
+    }
+
+    @Override
+    public boolean matches(EvaluationContext context) {
+        return context.userId()
+                .map(userId -> bucket(flagName, userId) < percent)
+                .orElse(false);
+    }
+
+    private static int bucket(String flagName, String userId) {
+        // floorMod, not %: hashCode() is often negative, and % would then return a negative bucket.
+        return Math.floorMod((flagName + ":" + userId).hashCode(), BUCKETS);
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

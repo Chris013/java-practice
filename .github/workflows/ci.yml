@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Starter code compiles (tests are expected to fail until the tasks are solved)
+        run: mvn -B -ntp clean test-compile
+
+      - name: Every reference solution passes all tests
+        run: mvn -B -ntp clean verify -Psolutions
+
+      - name: Code shown in the task files is up to date
+        run: java tools/EmbedCode.java --check

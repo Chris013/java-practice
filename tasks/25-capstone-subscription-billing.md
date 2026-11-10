@@ -270,18 +270,934 @@ The tests are in three places. [`BillingPeriodTest`](../src/test/java/io/github/
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task25/domain/SubscriptionTest.java -->
+**[`SubscriptionTest.java`](../src/test/java/io/github/chris013/practice/task25/domain/SubscriptionTest.java)**
+
+```java
+package io.github.chris013.practice.task25.domain;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.chris013.practice.task25.domain.RenewalOutcome.Ended;
+import io.github.chris013.practice.task25.domain.RenewalOutcome.Renewed;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.PlanChangeScheduled;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.PlanUpgraded;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionEnded;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionPastDue;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionReactivated;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionRenewed;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionStarted;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionSuspended;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.List;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class SubscriptionTest {
+
+    private static final SubscriptionId ID = new SubscriptionId("SUB-0001");
+    private static final CustomerId ANNA = new CustomerId("anna");
+    private static final LocalDate APRIL_1 = LocalDate.of(2026, 4, 1);
+    private static final LocalDate APRIL_14 = LocalDate.of(2026, 4, 14);
+    private static final LocalDate MAY_1 = LocalDate.of(2026, 5, 1);
+    private static final LocalDate JUNE_1 = LocalDate.of(2026, 6, 1);
+
+    /** A subscription that started on April 1st. Its start event is still pending. */
+    private static Subscription subscription(Plan plan) {
+        return Subscription.start(ID, ANNA, plan, APRIL_1);
+    }
+
+    /** Same as {@link #subscription}, but with the start event already pulled, so tests can assert on new events only. */
+    private static Subscription subscriptionWithoutEvents(Plan plan) {
+        Subscription subscription = subscription(plan);
+        subscription.pullEvents();
+        return subscription;
+    }
+
+    @Nested
+    class Starting {
+
+        @Test
+        void begins_active_with_a_period_that_starts_today() {
+            Subscription subscription = subscription(Plan.TEAM);
+
+            assertThat(subscription.id()).isEqualTo(ID);
+            assertThat(subscription.customerId()).isEqualTo(ANNA);
+            assertThat(subscription.plan()).isEqualTo(Plan.TEAM);
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.ACTIVE);
+            assertThat(subscription.currentPeriod()).isEqualTo(new BillingPeriod(APRIL_1, MAY_1));
+            assertThat(subscription.scheduledPlan()).isEmpty();
+            assertThat(subscription.cancelAtPeriodEnd()).isFalse();
+        }
+
+        @Test
+        void allows_the_free_plan() {
+            assertThat(subscription(Plan.FREE).plan()).isEqualTo(Plan.FREE);
+        }
+
+        @Test
+        void records_subscription_started_as_its_first_event() {
+            assertThat(subscription(Plan.TEAM).pullEvents())
+                    .containsExactly(new SubscriptionStarted(ID, ANNA, Plan.TEAM, APRIL_1));
+        }
+    }
+
+    @Nested
+    class Upgrading {
+
+        @Test
+        void prorates_both_plans_on_day_14_of_a_30_day_period() {
+            // TEAM unused: 29.00 x 17 / 30 = 16.433... -> 16.43, credited.
+            // BUSINESS remaining: 79.00 x 17 / 30 = 44.766... -> 44.77, charged.
+            List<InvoiceLine> lines = subscription(Plan.TEAM).changePlan(Plan.BUSINESS, APRIL_14);
+
+            assertThat(lines).containsExactly(
+                    new InvoiceLine("Unused time on TEAM (17 of 30 days)", new BigDecimal("-16.43")),
+                    new InvoiceLine("Remaining time on BUSINESS (17 of 30 days)", new BigDecimal("44.77")));
+        }
+
+        @Test
+        void rounds_each_line_separately_so_the_total_is_28_34_not_the_exact_28_33() {
+            // Exact difference: (79.00 - 29.00) x 17 / 30 = 28.333... Rounded lines: 44.77 - 16.43 = 28.34.
+            List<InvoiceLine> lines = subscription(Plan.TEAM).changePlan(Plan.BUSINESS, APRIL_14);
+
+            BigDecimal total = new Invoice(new InvoiceId("INV-1"), ID, ANNA, APRIL_14, lines).total();
+
+            assertThat(total).isEqualByComparingTo("28.34");
+        }
+
+        @Test
+        void an_upgrade_on_the_first_day_credits_and_charges_whole_months() {
+            List<InvoiceLine> lines = subscription(Plan.TEAM).changePlan(Plan.BUSINESS, APRIL_1);
+
+            assertThat(lines).containsExactly(
+                    new InvoiceLine("Unused time on TEAM (30 of 30 days)", new BigDecimal("-29.00")),
+                    new InvoiceLine("Remaining time on BUSINESS (30 of 30 days)", new BigDecimal("79.00")));
+        }
+
+        @Test
+        void an_upgrade_from_free_has_a_zero_credit_line() {
+            // TEAM on day 15: 16 days remain. 29.00 x 16 / 30 = 15.466... -> 15.47.
+            List<InvoiceLine> lines = subscription(Plan.FREE).changePlan(Plan.TEAM, LocalDate.of(2026, 4, 15));
+
+            assertThat(lines).containsExactly(
+                    new InvoiceLine("Unused time on FREE (16 of 30 days)", new BigDecimal("0.00")),
+                    new InvoiceLine("Remaining time on TEAM (16 of 30 days)", new BigDecimal("15.47")));
+        }
+
+        @Test
+        void takes_effect_immediately() {
+            Subscription subscription = subscription(Plan.TEAM);
+
+            subscription.changePlan(Plan.BUSINESS, APRIL_14);
+
+            assertThat(subscription.plan()).isEqualTo(Plan.BUSINESS);
+        }
+
+        @Test
+        void records_a_plan_upgraded_event() {
+            Subscription subscription = subscriptionWithoutEvents(Plan.TEAM);
+
+            subscription.changePlan(Plan.BUSINESS, APRIL_14);
+
+            assertThat(subscription.pullEvents())
+                    .containsExactly(new PlanUpgraded(ID, Plan.TEAM, Plan.BUSINESS, APRIL_14));
+        }
+
+        @Test
+        void clears_a_scheduled_downgrade() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.changePlan(Plan.FREE, APRIL_1);
+            assertThat(subscription.scheduledPlan()).contains(Plan.FREE);
+
+            subscription.changePlan(Plan.BUSINESS, APRIL_14);
+
+            assertThat(subscription.scheduledPlan()).isEmpty();
+        }
+
+        @Test
+        void rejects_the_plan_the_subscription_already_has() {
+            assertThatThrownBy(() -> subscription(Plan.TEAM).changePlan(Plan.TEAM, APRIL_14))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_change_unless_the_subscription_is_active() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+
+            assertThatThrownBy(() -> subscription.changePlan(Plan.BUSINESS, APRIL_14))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        void rejects_a_change_once_the_period_has_ended_and_renewal_is_due() {
+            assertThatThrownBy(() -> subscription(Plan.TEAM).changePlan(Plan.BUSINESS, MAY_1))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Nested
+    class Downgrading {
+
+        @Test
+        void is_scheduled_for_the_next_period_and_returns_no_lines() {
+            Subscription subscription = subscription(Plan.BUSINESS);
+
+            List<InvoiceLine> lines = subscription.changePlan(Plan.TEAM, APRIL_14);
+
+            assertThat(lines).isEmpty();
+            assertThat(subscription.scheduledPlan()).contains(Plan.TEAM);
+        }
+
+        @Test
+        void keeps_the_higher_plan_until_the_period_ends() {
+            Subscription subscription = subscription(Plan.BUSINESS);
+
+            subscription.changePlan(Plan.TEAM, APRIL_14);
+
+            assertThat(subscription.plan()).isEqualTo(Plan.BUSINESS);
+        }
+
+        @Test
+        void records_a_plan_change_scheduled_event_dated_at_the_period_end() {
+            Subscription subscription = subscriptionWithoutEvents(Plan.BUSINESS);
+
+            subscription.changePlan(Plan.TEAM, APRIL_14);
+
+            assertThat(subscription.pullEvents())
+                    .containsExactly(new PlanChangeScheduled(ID, Plan.BUSINESS, Plan.TEAM, MAY_1));
+        }
+
+        @Test
+        void a_second_downgrade_replaces_the_first() {
+            Subscription subscription = subscription(Plan.BUSINESS);
+
+            subscription.changePlan(Plan.TEAM, APRIL_14);
+            subscription.changePlan(Plan.FREE, APRIL_14);
+
+            assertThat(subscription.scheduledPlan()).contains(Plan.FREE);
+        }
+    }
+
+    @Nested
+    class CancellingAndResuming {
+
+        @Test
+        void cancelling_sets_the_flag_but_keeps_the_subscription_active() {
+            Subscription subscription = subscription(Plan.TEAM);
+
+            subscription.cancelAtPeriodEnd(APRIL_14);
+
+            assertThat(subscription.cancelAtPeriodEnd()).isTrue();
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.ACTIVE);
+            assertThat(subscription.plan()).isEqualTo(Plan.TEAM);
+        }
+
+        @Test
+        void cancelling_twice_changes_nothing() {
+            Subscription subscription = subscriptionWithoutEvents(Plan.TEAM);
+
+            subscription.cancelAtPeriodEnd(APRIL_14);
+            subscription.cancelAtPeriodEnd(APRIL_14);
+
+            assertThat(subscription.cancelAtPeriodEnd()).isTrue();
+            assertThat(subscription.pullEvents()).isEmpty();
+        }
+
+        @Test
+        void resuming_undoes_the_cancellation() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.cancelAtPeriodEnd(APRIL_14);
+
+            subscription.resume();
+
+            assertThat(subscription.cancelAtPeriodEnd()).isFalse();
+            assertThat(subscription.renew(MAY_1)).isEqualTo(
+                    new Renewed(List.of(new InvoiceLine("TEAM plan, 2026-05-01 to 2026-05-31", new BigDecimal("29.00")))));
+        }
+
+        @Test
+        void a_suspended_subscription_can_be_cancelled_and_ends_at_renewal() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+            subscription.paymentFailed(APRIL_1.plusDays(14));
+
+            subscription.cancelAtPeriodEnd(APRIL_14);
+
+            assertThat(subscription.renew(MAY_1)).isEqualTo(new Ended());
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.CANCELLED);
+        }
+
+        @Test
+        void a_cancelled_subscription_cannot_be_cancelled_again() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.cancelAtPeriodEnd(APRIL_14);
+            subscription.renew(MAY_1);
+
+            assertThatThrownBy(() -> subscription.cancelAtPeriodEnd(MAY_1))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        void a_cancellation_is_rejected_once_the_period_has_ended() {
+            assertThatThrownBy(() -> subscription(Plan.TEAM).cancelAtPeriodEnd(MAY_1))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Nested
+    class Renewal {
+
+        @Test
+        void is_not_allowed_the_day_before_the_period_ends() {
+            assertThatThrownBy(() -> subscription(Plan.TEAM).renew(MAY_1.minusDays(1)))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        void starts_the_next_period_and_bills_it_on_the_day_the_period_ends() {
+            Subscription subscription = subscription(Plan.TEAM);
+
+            RenewalOutcome outcome = subscription.renew(MAY_1);
+
+            assertThat(outcome).isEqualTo(
+                    new Renewed(List.of(new InvoiceLine("TEAM plan, 2026-05-01 to 2026-05-31", new BigDecimal("29.00")))));
+            assertThat(subscription.currentPeriod()).isEqualTo(new BillingPeriod(MAY_1, JUNE_1));
+        }
+
+        @Test
+        void applies_a_scheduled_downgrade_and_bills_the_new_plan() {
+            Subscription subscription = subscription(Plan.BUSINESS);
+            subscription.changePlan(Plan.TEAM, APRIL_14);
+
+            RenewalOutcome outcome = subscription.renew(MAY_1);
+
+            assertThat(outcome).isEqualTo(
+                    new Renewed(List.of(new InvoiceLine("TEAM plan, 2026-05-01 to 2026-05-31", new BigDecimal("29.00")))));
+            assertThat(subscription.plan()).isEqualTo(Plan.TEAM);
+            assertThat(subscription.scheduledPlan()).isEmpty();
+        }
+
+        @Test
+        void a_free_plan_renews_without_any_lines() {
+            Subscription subscription = subscription(Plan.FREE);
+
+            assertThat(subscription.renew(MAY_1)).isEqualTo(new Renewed(List.of()));
+            assertThat(subscription.currentPeriod()).isEqualTo(new BillingPeriod(MAY_1, JUNE_1));
+        }
+
+        @Test
+        void moves_one_period_per_call_even_when_several_are_due() {
+            Subscription subscription = subscription(Plan.TEAM);
+
+            subscription.renew(JUNE_1);
+
+            assertThat(subscription.currentPeriod()).isEqualTo(new BillingPeriod(MAY_1, JUNE_1));
+        }
+
+        @Test
+        void records_a_renewed_event_with_the_new_period() {
+            Subscription subscription = subscriptionWithoutEvents(Plan.TEAM);
+
+            subscription.renew(MAY_1);
+
+            assertThat(subscription.pullEvents())
+                    .containsExactly(new SubscriptionRenewed(ID, Plan.TEAM, new BillingPeriod(MAY_1, JUNE_1)));
+        }
+
+        @Test
+        void a_cancelled_subscription_ends_instead_of_renewing() {
+            Subscription subscription = subscriptionWithoutEvents(Plan.TEAM);
+            subscription.cancelAtPeriodEnd(APRIL_14);
+
+            RenewalOutcome outcome = subscription.renew(MAY_1);
+
+            assertThat(outcome).isEqualTo(new Ended());
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.CANCELLED);
+            assertThat(subscription.pullEvents()).containsExactly(new SubscriptionEnded(ID, MAY_1));
+        }
+
+        @Test
+        void an_ended_subscription_cannot_be_renewed_or_resumed() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.cancelAtPeriodEnd(APRIL_14);
+            subscription.renew(MAY_1);
+
+            assertThatThrownBy(() -> subscription.renew(JUNE_1)).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(subscription::resume).isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Nested
+    class Dunning {
+
+        @Test
+        void the_first_failed_payment_makes_the_subscription_past_due() {
+            Subscription subscription = subscriptionWithoutEvents(Plan.TEAM);
+
+            subscription.paymentFailed(APRIL_14);
+
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.PAST_DUE);
+            assertThat(subscription.pullEvents()).containsExactly(new SubscriptionPastDue(ID, APRIL_14));
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0, PAST_DUE", "13, PAST_DUE", "14, SUSPENDED", "30, SUSPENDED"})
+        void suspends_the_subscription_once_14_days_have_passed_since_the_first_failure(
+                int daysAfterFirstFailure, SubscriptionStatus expected) {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+
+            subscription.paymentFailed(APRIL_1.plusDays(daysAfterFirstFailure));
+
+            assertThat(subscription.status()).isEqualTo(expected);
+        }
+
+        @Test
+        void later_failures_do_not_move_the_first_failure_date() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+            subscription.paymentFailed(APRIL_1.plusDays(10));
+
+            subscription.paymentFailed(APRIL_1.plusDays(14));
+
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.SUSPENDED);
+        }
+
+        @Test
+        void a_suspension_is_recorded_as_an_event() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+            subscription.pullEvents();
+
+            subscription.paymentFailed(APRIL_1.plusDays(14));
+
+            assertThat(subscription.pullEvents())
+                    .containsExactly(new SubscriptionSuspended(ID, APRIL_1.plusDays(14)));
+        }
+
+        @Test
+        void a_successful_payment_reactivates_a_past_due_subscription_and_restarts_the_grace_period() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+
+            subscription.paymentSucceeded();
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.ACTIVE);
+
+            subscription.paymentFailed(APRIL_1.plusDays(20));
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.PAST_DUE);
+        }
+
+        @Test
+        void a_successful_payment_reactivates_a_suspended_subscription() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+            subscription.paymentFailed(APRIL_1.plusDays(14));
+
+            subscription.paymentSucceeded();
+
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.ACTIVE);
+        }
+
+        @Test
+        void a_reactivation_is_recorded_as_an_event() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.paymentFailed(APRIL_1);
+            subscription.pullEvents();
+
+            subscription.paymentSucceeded();
+
+            assertThat(subscription.pullEvents()).containsExactly(new SubscriptionReactivated(ID));
+        }
+
+        @Test
+        void a_successful_payment_on_an_active_subscription_changes_nothing() {
+            Subscription subscription = subscriptionWithoutEvents(Plan.TEAM);
+
+            subscription.paymentSucceeded();
+
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.ACTIVE);
+            assertThat(subscription.pullEvents()).isEmpty();
+        }
+
+        @Test
+        void a_failed_payment_on_a_cancelled_subscription_is_rejected() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.cancelAtPeriodEnd(APRIL_14);
+            subscription.renew(MAY_1);
+
+            assertThatThrownBy(() -> subscription.paymentFailed(MAY_1)).isInstanceOf(IllegalStateException.class);
+        }
+    }
+
+    @Nested
+    class Events {
+
+        @Test
+        void pull_events_hands_over_each_event_only_once() {
+            Subscription subscription = subscription(Plan.TEAM);
+
+            assertThat(subscription.pullEvents()).hasSize(1);
+            assertThat(subscription.pullEvents()).isEmpty();
+        }
+
+        @Test
+        void events_come_out_in_the_order_they_happened() {
+            Subscription subscription = subscription(Plan.TEAM);
+
+            subscription.changePlan(Plan.BUSINESS, APRIL_14);
+            subscription.paymentFailed(APRIL_14);
+            subscription.renew(MAY_1);
+
+            assertThat(subscription.pullEvents()).containsExactly(
+                    new SubscriptionStarted(ID, ANNA, Plan.TEAM, APRIL_1),
+                    new PlanUpgraded(ID, Plan.TEAM, Plan.BUSINESS, APRIL_14),
+                    new SubscriptionPastDue(ID, APRIL_14),
+                    new SubscriptionRenewed(ID, Plan.BUSINESS, new BillingPeriod(MAY_1, JUNE_1)));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task25/application/BillingServiceTest.java -->
+**[`BillingServiceTest.java`](../src/test/java/io/github/chris013/practice/task25/application/BillingServiceTest.java)**
+
+```java
+package io.github.chris013.practice.task25.application;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.chris013.practice.task25.adapter.inmemory.InMemoryInvoices;
+import io.github.chris013.practice.task25.adapter.inmemory.InMemorySubscriptions;
+import io.github.chris013.practice.task25.adapter.inmemory.SequentialInvoiceIds;
+import io.github.chris013.practice.task25.adapter.inmemory.SequentialSubscriptionIds;
+import io.github.chris013.practice.task25.application.FakePaymentProvider.Charge;
+import io.github.chris013.practice.task25.domain.BillingPeriod;
+import io.github.chris013.practice.task25.domain.CustomerId;
+import io.github.chris013.practice.task25.domain.Invoice;
+import io.github.chris013.practice.task25.domain.InvoiceId;
+import io.github.chris013.practice.task25.domain.InvoiceLine;
+import io.github.chris013.practice.task25.domain.Plan;
+import io.github.chris013.practice.task25.domain.Subscription;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionReactivated;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionStarted;
+import io.github.chris013.practice.task25.domain.SubscriptionId;
+import io.github.chris013.practice.task25.domain.SubscriptionStatus;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class BillingServiceTest {
+
+    private static final CustomerId ANNA = new CustomerId("anna");
+    private static final CustomerId BEN = new CustomerId("ben");
+    private static final LocalDate APRIL_1 = LocalDate.of(2026, 4, 1);
+    private static final LocalDate APRIL_14 = LocalDate.of(2026, 4, 14);
+    private static final LocalDate MAY_1 = LocalDate.of(2026, 5, 1);
+    private static final LocalDate JUNE_1 = LocalDate.of(2026, 6, 1);
+    private static final BillingRunReport NOTHING_HAPPENED = new BillingRunReport(0, 0, 0, 0, 0);
+
+    private final MutableClock clock = new MutableClock(APRIL_1);
+    private final InMemorySubscriptions subscriptions = new InMemorySubscriptions();
+    private final InMemoryInvoices invoices = new InMemoryInvoices();
+    private final FakePaymentProvider payments = new FakePaymentProvider();
+    private final List<String> log = new ArrayList<>();
+    private final RecordingEventPublisher publisher = new RecordingEventPublisher(log);
+    private final BillingService billing = serviceWith(subscriptions);
+
+    private BillingService serviceWith(SubscriptionRepository repository) {
+        return new BillingService(
+                repository, invoices, payments, publisher,
+                new SequentialSubscriptionIds(), new SequentialInvoiceIds(), clock);
+    }
+
+    private Subscription subscription(SubscriptionId id) {
+        return subscriptions.findById(id).orElseThrow();
+    }
+
+    /** Wraps the real store and writes "saved" to the shared log, so the order of saves and publishes can be checked. */
+    private record LoggingSubscriptions(SubscriptionRepository delegate, List<String> log)
+            implements SubscriptionRepository {
+
+        @Override
+        public Optional<Subscription> findById(SubscriptionId id) {
+            return delegate.findById(id);
+        }
+
+        @Override
+        public List<Subscription> findDueForRenewal(LocalDate today) {
+            return delegate.findDueForRenewal(today);
+        }
+
+        @Override
+        public void save(Subscription subscription) {
+            log.add("saved");
+            delegate.save(subscription);
+        }
+    }
+
+    @Nested
+    class Subscribing {
+
+        @Test
+        void gives_each_new_subscription_the_next_sequential_id() {
+            SubscriptionId first = billing.subscribe(ANNA, Plan.TEAM);
+            SubscriptionId second = billing.subscribe(BEN, Plan.FREE);
+
+            assertThat(first.value()).isEqualTo("SUB-0001");
+            assertThat(second.value()).isEqualTo("SUB-0002");
+            assertThat(subscription(first).plan()).isEqualTo(Plan.TEAM);
+            assertThat(subscription(second).customerId()).isEqualTo(BEN);
+        }
+
+        @Test
+        void a_new_subscription_is_active_on_the_day_it_starts() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.ACTIVE);
+            assertThat(subscription(id).currentPeriod()).isEqualTo(new BillingPeriod(APRIL_1, MAY_1));
+        }
+    }
+
+    @Nested
+    class Upgrading {
+
+        @Test
+        void an_upgrade_issues_a_proration_invoice_and_charges_the_net_amount() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(APRIL_14);
+
+            billing.changePlan(id, Plan.BUSINESS);
+
+            assertThat(subscription(id).plan()).isEqualTo(Plan.BUSINESS);
+            Invoice invoice = invoices.findBySubscription(id).getFirst();
+            assertThat(invoice.issuedOn()).isEqualTo(APRIL_14);
+            assertThat(invoice.lines()).containsExactly(
+                    new InvoiceLine("Unused time on TEAM (17 of 30 days)", new BigDecimal("-16.43")),
+                    new InvoiceLine("Remaining time on BUSINESS (17 of 30 days)", new BigDecimal("44.77")));
+            assertThat(payments.charges()).containsExactly(new Charge(ANNA, new BigDecimal("28.34"), invoice.id()));
+        }
+
+        @Test
+        void a_declined_upgrade_charge_puts_the_subscription_past_due_but_keeps_the_new_plan() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(APRIL_14);
+            payments.declineEverything();
+
+            billing.changePlan(id, Plan.BUSINESS);
+
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.PAST_DUE);
+            assertThat(subscription(id).plan()).isEqualTo(Plan.BUSINESS);
+        }
+
+        @Test
+        void a_downgrade_creates_no_invoice_and_no_charge() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.BUSINESS);
+
+            billing.changePlan(id, Plan.TEAM);
+
+            assertThat(invoices.findBySubscription(id)).isEmpty();
+            assertThat(payments.charges()).isEmpty();
+            assertThat(subscription(id).scheduledPlan()).contains(Plan.TEAM);
+        }
+
+        @Test
+        void rejects_an_unknown_subscription() {
+            assertThatThrownBy(() -> billing.changePlan(new SubscriptionId("SUB-9999"), Plan.TEAM))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class DailyBilling {
+
+        @Test
+        void renews_a_due_subscription_and_bills_the_new_period() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+
+            BillingRunReport report = billing.runDailyBilling();
+
+            assertThat(report).isEqualTo(new BillingRunReport(1, 0, 1, 0, 0));
+            Invoice invoice = invoices.findBySubscription(id).getFirst();
+            assertThat(invoice.issuedOn()).isEqualTo(MAY_1);
+            assertThat(invoice.lines()).containsExactly(
+                    new InvoiceLine("TEAM plan, 2026-05-01 to 2026-05-31", new BigDecimal("29.00")));
+            assertThat(payments.charges()).containsExactly(new Charge(ANNA, new BigDecimal("29.00"), invoice.id()));
+            assertThat(subscription(id).currentPeriod()).isEqualTo(new BillingPeriod(MAY_1, JUNE_1));
+        }
+
+        @Test
+        void does_nothing_before_the_period_ends() {
+            billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(LocalDate.of(2026, 4, 30));
+
+            assertThat(billing.runDailyBilling()).isEqualTo(NOTHING_HAPPENED);
+            assertThat(payments.charges()).isEmpty();
+        }
+
+        @Test
+        void re_running_the_same_day_does_not_charge_twice() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            billing.runDailyBilling();
+
+            BillingRunReport second = billing.runDailyBilling();
+
+            assertThat(second).isEqualTo(NOTHING_HAPPENED);
+            assertThat(payments.charges()).hasSize(1);
+            assertThat(invoices.findBySubscription(id)).hasSize(1);
+        }
+
+        @Test
+        void after_a_crash_the_invoice_is_neither_created_nor_charged_again() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            // The job saved the May invoice, then crashed before it saved the subscription.
+            invoices.save(new Invoice(
+                    new InvoiceId("INV-CRASHED"), id, ANNA, MAY_1,
+                    List.of(new InvoiceLine("TEAM plan, 2026-05-01 to 2026-05-31", new BigDecimal("29.00")))));
+
+            BillingRunReport report = billing.runDailyBilling();
+
+            assertThat(report).isEqualTo(new BillingRunReport(1, 0, 0, 0, 1));
+            assertThat(payments.charges()).isEmpty();
+            assertThat(invoices.findBySubscription(id)).hasSize(1);
+            assertThat(subscription(id).currentPeriod().start()).isEqualTo(MAY_1);
+        }
+
+        @Test
+        void a_free_subscription_renews_without_an_invoice() {
+            billing.subscribe(ANNA, Plan.FREE);
+            clock.moveTo(MAY_1);
+
+            assertThat(billing.runDailyBilling()).isEqualTo(new BillingRunReport(1, 0, 0, 0, 0));
+            assertThat(payments.charges()).isEmpty();
+        }
+
+        @Test
+        void a_declined_renewal_marks_the_subscription_past_due_and_is_counted() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            payments.declineEverything();
+
+            assertThat(billing.runDailyBilling()).isEqualTo(new BillingRunReport(1, 0, 1, 1, 0));
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.PAST_DUE);
+        }
+
+        @Test
+        void a_subscription_two_periods_behind_gets_two_invoices() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(JUNE_1);
+
+            assertThat(billing.runDailyBilling()).isEqualTo(new BillingRunReport(2, 0, 2, 0, 0));
+            assertThat(invoices.findBySubscription(id)).extracting(Invoice::issuedOn).containsExactly(MAY_1, JUNE_1);
+            assertThat(subscription(id).currentPeriod().start()).isEqualTo(JUNE_1);
+        }
+
+        @Test
+        void a_cancelled_subscription_ends_without_an_invoice_and_is_not_due_again() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            billing.cancel(id);
+            clock.moveTo(MAY_1);
+
+            assertThat(billing.runDailyBilling()).isEqualTo(new BillingRunReport(0, 1, 0, 0, 0));
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.CANCELLED);
+            assertThat(invoices.findBySubscription(id)).isEmpty();
+            assertThat(billing.runDailyBilling()).isEqualTo(NOTHING_HAPPENED);
+        }
+    }
+
+    @Nested
+    class Dunning {
+
+        @Test
+        void a_paid_renewal_reactivates_a_past_due_subscription() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            payments.declineEverything();
+            billing.runDailyBilling();
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.PAST_DUE);
+
+            payments.acceptEverything();
+            clock.moveTo(JUNE_1);
+            billing.runDailyBilling();
+
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.ACTIVE);
+            assertThat(publisher.published()).anySatisfy(event ->
+                    assertThat(event).isInstanceOf(SubscriptionReactivated.class));
+        }
+
+        @Test
+        void a_second_declined_renewal_after_14_days_suspends() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            payments.declineEverything();
+            billing.runDailyBilling();
+
+            clock.moveTo(JUNE_1);
+            billing.runDailyBilling();
+
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.SUSPENDED);
+        }
+    }
+
+    @Nested
+    class Publishing {
+
+        @Test
+        void publishes_renewal_events_only_after_the_subscription_is_saved() {
+            BillingService logged = serviceWith(new LoggingSubscriptions(subscriptions, log));
+            logged.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            log.clear();
+
+            logged.runDailyBilling();
+
+            assertThat(log).containsExactly("saved", "published SubscriptionRenewed");
+        }
+
+        @Test
+        void publishes_the_start_of_a_subscription() {
+            billing.subscribe(ANNA, Plan.TEAM);
+
+            assertThat(publisher.published()).singleElement().isInstanceOf(SubscriptionStarted.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task25/application/FakePaymentProvider.java -->
+**[`FakePaymentProvider.java`](../src/test/java/io/github/chris013/practice/task25/application/FakePaymentProvider.java)**
+
+```java
+package io.github.chris013.practice.task25.application;
+
+import io.github.chris013.practice.task25.domain.CustomerId;
+import io.github.chris013.practice.task25.domain.InvoiceId;
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+
+/** Records every charge. Accepts them all, unless the test calls {@link #declineEverything()}. */
+final class FakePaymentProvider implements PaymentProvider {
+
+    record Charge(CustomerId customerId, BigDecimal amount, InvoiceId reference) {}
+
+    private final List<Charge> charges = new ArrayList<>();
+    private boolean declining;
+
+    void declineEverything() {
+        declining = true;
+    }
+
+    void acceptEverything() {
+        declining = false;
+    }
+
+    @Override
+    public PaymentResult charge(CustomerId customerId, BigDecimal amount, InvoiceId reference) {
+        charges.add(new Charge(customerId, amount, reference));
+        return declining
+                ? new PaymentResult.Declined("card declined")
+                : new PaymentResult.Paid("tx-" + charges.size());
+    }
+
+    List<Charge> charges() {
+        return List.copyOf(charges);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task25/application/RecordingEventPublisher.java -->
+**[`RecordingEventPublisher.java`](../src/test/java/io/github/chris013/practice/task25/application/RecordingEventPublisher.java)**
+
+```java
+package io.github.chris013.practice.task25.application;
+
+import io.github.chris013.practice.task25.domain.SubscriptionEvent;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Remembers every published event. It also appends a line to a shared log, so a test can check that
+ * events were published after the subscription was saved.
+ */
+final class RecordingEventPublisher implements EventPublisher {
+
+    private final List<SubscriptionEvent> published = new ArrayList<>();
+    private final List<String> log;
+
+    RecordingEventPublisher(List<String> log) {
+        this.log = log;
+    }
+
+    @Override
+    public void publish(SubscriptionEvent event) {
+        published.add(event);
+        log.add("published " + event.getClass().getSimpleName());
+    }
+
+    List<SubscriptionEvent> published() {
+        return List.copyOf(published);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task25/application/MutableClock.java -->
+**[`MutableClock.java`](../src/test/java/io/github/chris013/practice/task25/application/MutableClock.java)**
+
+```java
+package io.github.chris013.practice.task25.application;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+
+/** A clock that stays on the given day, at 09:00 UTC, until the test moves it. */
+final class MutableClock extends Clock {
+
+    private LocalDate today;
+
+    MutableClock(LocalDate today) {
+        this.today = today;
+    }
+
+    void moveTo(LocalDate day) {
+        today = day;
+    }
+
+    @Override
+    public Instant instant() {
+        return today.atTime(9, 0).toInstant(ZoneOffset.UTC);
+    }
+
+    @Override
+    public ZoneId getZone() {
+        return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+        throw new UnsupportedOperationException("Not needed in these tests");
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -332,15 +1248,559 @@ The tests are in three places. [`BillingPeriodTest`](../src/test/java/io/github/
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task25/domain/Subscription.java -->
+**[`Subscription.java`](../solutions/src/main/java/io/github/chris013/practice/task25/domain/Subscription.java)**
+
+```java
+package io.github.chris013.practice.task25.domain;
+
+import static io.github.chris013.practice.task25.domain.SubscriptionStatus.ACTIVE;
+import static io.github.chris013.practice.task25.domain.SubscriptionStatus.CANCELLED;
+import static io.github.chris013.practice.task25.domain.SubscriptionStatus.PAST_DUE;
+import static io.github.chris013.practice.task25.domain.SubscriptionStatus.SUSPENDED;
+
+import io.github.chris013.practice.task25.domain.RenewalOutcome.Ended;
+import io.github.chris013.practice.task25.domain.RenewalOutcome.Renewed;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.PlanChangeScheduled;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.PlanUpgraded;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionEnded;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionPastDue;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionReactivated;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionRenewed;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionStarted;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionSuspended;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * A customer's subscription, and the aggregate root for every change to its plan, period and status.
+ *
+ * <p>The billing service only orchestrates: it loads, calls a method here, saves, charges and publishes. The rules
+ * live here because they are facts about the subscription. Whoever calls, the same upgrade is allowed or refused
+ * and a renewal moves the same way. Money is a consequence: this class returns invoice lines, and the service turns
+ * them into an {@link Invoice}.
+ *
+ * <p>Dates arrive as parameters. The aggregate never reads the system clock, so the caller decides what "today" is.
+ */
+public final class Subscription {
+
+    /** Days after the first failed payment before the subscription is suspended. */
+    static final int GRACE_PERIOD_DAYS = 14;
+
+    private final SubscriptionId id;
+    private final CustomerId customerId;
+    private final List<SubscriptionEvent> events = new ArrayList<>();
+    private Plan plan;
+    private SubscriptionStatus status;
+    private BillingPeriod currentPeriod;
+    private Plan scheduledPlan;
+    private boolean cancelAtPeriodEnd;
+    private LocalDate firstFailedPaymentOn;
+
+    private Subscription(SubscriptionId id, CustomerId customerId, Plan plan, BillingPeriod currentPeriod) {
+        this.id = id;
+        this.customerId = customerId;
+        this.plan = plan;
+        this.currentPeriod = currentPeriod;
+        this.status = ACTIVE;
+    }
+
+    /** Starts an active subscription whose first period begins today. Any plan, including FREE, is allowed. */
+    public static Subscription start(SubscriptionId id, CustomerId customerId, Plan plan, LocalDate today) {
+        Objects.requireNonNull(id, "id");
+        Objects.requireNonNull(customerId, "customerId");
+        Objects.requireNonNull(plan, "plan");
+        Objects.requireNonNull(today, "today");
+        Subscription subscription = new Subscription(id, customerId, plan, BillingPeriod.monthStartingOn(today));
+        subscription.events.add(new SubscriptionStarted(id, customerId, plan, today));
+        return subscription;
+    }
+
+    /**
+     * Upgrades take effect now, with proration. Downgrades wait until the period ends.
+     *
+     * @return the proration lines for an upgrade, or an empty list for a downgrade
+     */
+    public List<InvoiceLine> changePlan(Plan newPlan, LocalDate today) {
+        Objects.requireNonNull(newPlan, "newPlan");
+        Objects.requireNonNull(today, "today");
+        if (newPlan == plan) {
+            throw new IllegalArgumentException("The subscription is already on %s".formatted(plan));
+        }
+        requireStatus(ACTIVE, "change the plan");
+        requireInCurrentPeriod(today, "change the plan");
+        if (newPlan.isUpgradeFrom(plan)) {
+            return upgradeTo(newPlan, today);
+        }
+        scheduledPlan = newPlan;
+        events.add(new PlanChangeScheduled(id, plan, newPlan, currentPeriod.endExclusive()));
+        return List.of();
+    }
+
+    /**
+     * Stops the subscription at the end of the current period. Calling it again changes nothing.
+     * Cancelling is a promise about the future, so it does not refund or change the current period.
+     */
+    public void cancelAtPeriodEnd(LocalDate today) {
+        Objects.requireNonNull(today, "today");
+        if (status == CANCELLED) {
+            throw new IllegalStateException("A cancelled subscription cannot be cancelled again");
+        }
+        requireInCurrentPeriod(today, "cancel");
+        cancelAtPeriodEnd = true;
+    }
+
+    /** Undoes a cancellation that has not taken effect yet. */
+    public void resume() {
+        if (status == CANCELLED) {
+            throw new IllegalStateException("A cancelled subscription cannot be resumed");
+        }
+        cancelAtPeriodEnd = false;
+    }
+
+    /**
+     * Ends the current period and starts the next one. Renews one period per call. A caller that is several
+     * periods behind calls again until {@link #currentPeriod()} reaches today.
+     */
+    public RenewalOutcome renew(LocalDate today) {
+        Objects.requireNonNull(today, "today");
+        if (status == CANCELLED) {
+            throw new IllegalStateException("A cancelled subscription cannot be renewed");
+        }
+        if (today.isBefore(currentPeriod.endExclusive())) {
+            throw new IllegalStateException(
+                    "The period runs until %s, so renewal is not due on %s".formatted(currentPeriod.endExclusive(), today));
+        }
+        if (cancelAtPeriodEnd) {
+            status = CANCELLED;
+            events.add(new SubscriptionEnded(id, today));
+            return new Ended();
+        }
+        if (scheduledPlan != null) {
+            plan = scheduledPlan;
+            scheduledPlan = null;
+        }
+        currentPeriod = currentPeriod.next();
+        events.add(new SubscriptionRenewed(id, plan, currentPeriod));
+        return new Renewed(linesFor(plan, currentPeriod));
+    }
+
+    /**
+     * The first failure makes the subscription PAST_DUE. Once {@link #GRACE_PERIOD_DAYS} have passed since that
+     * first failure, a further failure suspends it. Later failures do not move the first failure date.
+     */
+    public void paymentFailed(LocalDate today) {
+        Objects.requireNonNull(today, "today");
+        switch (status) {
+            case ACTIVE -> {
+                status = PAST_DUE;
+                firstFailedPaymentOn = today;
+                events.add(new SubscriptionPastDue(id, today));
+            }
+            case PAST_DUE -> {
+                if (ChronoUnit.DAYS.between(firstFailedPaymentOn, today) >= GRACE_PERIOD_DAYS) {
+                    status = SUSPENDED;
+                    events.add(new SubscriptionSuspended(id, today));
+                }
+            }
+            case SUSPENDED -> {
+                // Already suspended. Nothing more to do.
+            }
+            case CANCELLED -> throw new IllegalStateException("A cancelled subscription has no payments to fail");
+        }
+    }
+
+    /** A successful payment clears the failure and starts a new grace period from zero next time. */
+    public void paymentSucceeded() {
+        switch (status) {
+            case ACTIVE -> {
+                // Nothing to recover from.
+            }
+            case PAST_DUE, SUSPENDED -> {
+                status = ACTIVE;
+                firstFailedPaymentOn = null;
+                events.add(new SubscriptionReactivated(id));
+            }
+            case CANCELLED -> throw new IllegalStateException("A cancelled subscription has no payments to succeed");
+        }
+    }
+
+    /** Returns the events recorded since the last call, and forgets them. */
+    public List<SubscriptionEvent> pullEvents() {
+        List<SubscriptionEvent> recorded = List.copyOf(events);
+        events.clear();
+        return recorded;
+    }
+
+    public SubscriptionId id() {
+        return id;
+    }
+
+    public CustomerId customerId() {
+        return customerId;
+    }
+
+    public Plan plan() {
+        return plan;
+    }
+
+    public SubscriptionStatus status() {
+        return status;
+    }
+
+    public BillingPeriod currentPeriod() {
+        return currentPeriod;
+    }
+
+    public Optional<Plan> scheduledPlan() {
+        return Optional.ofNullable(scheduledPlan);
+    }
+
+    public boolean cancelAtPeriodEnd() {
+        return cancelAtPeriodEnd;
+    }
+
+    private List<InvoiceLine> upgradeTo(Plan newPlan, LocalDate today) {
+        int daysLeft = currentPeriod.daysRemainingFrom(today);
+        int periodDays = currentPeriod.lengthInDays();
+        List<InvoiceLine> lines = List.of(
+                new InvoiceLine(
+                        "Unused time on %s (%d of %d days)".formatted(plan, daysLeft, periodDays),
+                        prorated(plan, daysLeft, periodDays).negate()),
+                new InvoiceLine(
+                        "Remaining time on %s (%d of %d days)".formatted(newPlan, daysLeft, periodDays),
+                        prorated(newPlan, daysLeft, periodDays)));
+        events.add(new PlanUpgraded(id, plan, newPlan, today));
+        plan = newPlan;
+        scheduledPlan = null;
+        return lines;
+    }
+
+    /**
+     * Multiplies first and divides once, so there is no floating point error. Each line is rounded on its own,
+     * half-up to cents, so the lines on an invoice add up to what the customer sees on each line.
+     */
+    private static BigDecimal prorated(Plan plan, int days, int periodDays) {
+        return plan.monthlyPrice()
+                .multiply(BigDecimal.valueOf(days))
+                .divide(BigDecimal.valueOf(periodDays), 2, RoundingMode.HALF_UP);
+    }
+
+    private static List<InvoiceLine> linesFor(Plan plan, BillingPeriod period) {
+        if (plan == Plan.FREE) {
+            return List.of();
+        }
+        String description = "%s plan, %s to %s".formatted(plan, period.start(), period.endExclusive().minusDays(1));
+        return List.of(new InvoiceLine(description, plan.monthlyPrice()));
+    }
+
+    private void requireStatus(SubscriptionStatus required, String action) {
+        if (status != required) {
+            throw new IllegalStateException("Cannot %s while the subscription is %s".formatted(action, status));
+        }
+    }
+
+    private void requireInCurrentPeriod(LocalDate today, String action) {
+        if (!today.isBefore(currentPeriod.endExclusive())) {
+            throw new IllegalStateException(
+                    "Cannot %s: the period ended on %s and renewal is due, run renewal first"
+                            .formatted(action, currentPeriod.endExclusive()));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task25/application/BillingService.java -->
+**[`BillingService.java`](../solutions/src/main/java/io/github/chris013/practice/task25/application/BillingService.java)**
+
+```java
+package io.github.chris013.practice.task25.application;
+
+import io.github.chris013.practice.task25.domain.CustomerId;
+import io.github.chris013.practice.task25.domain.Invoice;
+import io.github.chris013.practice.task25.domain.InvoiceLine;
+import io.github.chris013.practice.task25.domain.Plan;
+import io.github.chris013.practice.task25.domain.RenewalOutcome;
+import io.github.chris013.practice.task25.domain.Subscription;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent;
+import io.github.chris013.practice.task25.domain.SubscriptionId;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * The application service: the use cases of the billing module. It loads aggregates, asks them to change,
+ * turns their answers into invoices, charges, saves and publishes. It does not decide any billing rule itself.
+ *
+ * <p>Ordering rules that keep the system safe to re-run:
+ * <ul>
+ *   <li>an invoice is saved before it is charged, so a crash after the charge cannot create a second charge;</li>
+ *   <li>the subscription is saved before its events are published, so no listener reacts to a change that was lost;</li>
+ *   <li>a renewal invoice is recognised by {@link InvoiceRepository#existsFor}, so a second run skips it.</li>
+ * </ul>
+ */
+public final class BillingService {
+
+    private final SubscriptionRepository subscriptions;
+    private final InvoiceRepository invoices;
+    private final PaymentProvider payments;
+    private final EventPublisher eventPublisher;
+    private final SubscriptionIds subscriptionIds;
+    private final InvoiceIds invoiceIds;
+    private final Clock clock;
+
+    public BillingService(
+            SubscriptionRepository subscriptions,
+            InvoiceRepository invoices,
+            PaymentProvider payments,
+            EventPublisher eventPublisher,
+            SubscriptionIds subscriptionIds,
+            InvoiceIds invoiceIds,
+            Clock clock) {
+        this.subscriptions = Objects.requireNonNull(subscriptions, "subscriptions");
+        this.invoices = Objects.requireNonNull(invoices, "invoices");
+        this.payments = Objects.requireNonNull(payments, "payments");
+        this.eventPublisher = Objects.requireNonNull(eventPublisher, "eventPublisher");
+        this.subscriptionIds = Objects.requireNonNull(subscriptionIds, "subscriptionIds");
+        this.invoiceIds = Objects.requireNonNull(invoiceIds, "invoiceIds");
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    /** Creates a subscription that starts today. The first period is not billed here (see the task text). */
+    public SubscriptionId subscribe(CustomerId customerId, Plan plan) {
+        Subscription subscription = Subscription.start(subscriptionIds.next(), customerId, plan, today());
+        subscriptions.save(subscription);
+        publishPendingEvents(subscription);
+        return subscription.id();
+    }
+
+    /** An upgrade is billed at once, with proration. A downgrade is only scheduled. */
+    public void changePlan(SubscriptionId id, Plan newPlan) {
+        Subscription subscription = load(id);
+        LocalDate today = today();
+        List<InvoiceLine> lines = subscription.changePlan(newPlan, today);
+        if (!lines.isEmpty()) {
+            Invoice invoice = newInvoice(subscription, today, lines);
+            invoices.save(invoice);
+            collect(subscription, invoice, today);
+        }
+        subscriptions.save(subscription);
+        publishPendingEvents(subscription);
+    }
+
+    /** Cancellation takes effect at the end of the current period. */
+    public void cancel(SubscriptionId id) {
+        Subscription subscription = load(id);
+        subscription.cancelAtPeriodEnd(today());
+        subscriptions.save(subscription);
+        publishPendingEvents(subscription);
+    }
+
+    /**
+     * The nightly job. Safe to run again after a crash: a renewal whose invoice already exists is skipped, so
+     * nobody is charged twice. An invoice that was saved but never charged is skipped too and stays unpaid; the
+     * task's key decisions explain this gap. A subscription that is several periods behind gets one invoice per
+     * period.
+     */
+    public BillingRunReport runDailyBilling() {
+        LocalDate today = today();
+        Tally tally = new Tally();
+        for (Subscription subscription : subscriptions.findDueForRenewal(today)) {
+            renewUntilCurrent(subscription, today, tally);
+            subscriptions.save(subscription);
+            publishPendingEvents(subscription);
+        }
+        return tally.toReport();
+    }
+
+    private void renewUntilCurrent(Subscription subscription, LocalDate today, Tally tally) {
+        while (!subscription.currentPeriod().endExclusive().isAfter(today)) {
+            switch (subscription.renew(today)) {
+                case RenewalOutcome.Ended _ -> {
+                    tally.ended++;
+                    return;
+                }
+                case RenewalOutcome.Renewed renewed -> {
+                    tally.renewed++;
+                    invoiceRenewal(subscription, renewed, today, tally);
+                }
+            }
+        }
+    }
+
+    private void invoiceRenewal(Subscription subscription, RenewalOutcome.Renewed renewal, LocalDate today, Tally tally) {
+        if (renewal.lines().isEmpty()) {
+            return; // FREE: nothing to bill.
+        }
+        LocalDate periodStart = subscription.currentPeriod().start();
+        if (invoices.existsFor(subscription.id(), periodStart)) {
+            tally.skippedAlreadyInvoiced++;
+            return;
+        }
+        Invoice invoice = newInvoice(subscription, periodStart, renewal.lines());
+        invoices.save(invoice);
+        tally.invoiced++;
+        if (collect(subscription, invoice, today)) {
+            tally.paymentsFailed++;
+        }
+    }
+
+    /** Charges the invoice if it asks for money. Returns true if the card was declined. */
+    private boolean collect(Subscription subscription, Invoice invoice, LocalDate today) {
+        if (invoice.total().signum() <= 0) {
+            return false;
+        }
+        return switch (payments.charge(invoice.customerId(), invoice.total(), invoice.id())) {
+            case PaymentResult.Paid _ -> {
+                subscription.paymentSucceeded();
+                yield false;
+            }
+            case PaymentResult.Declined _ -> {
+                subscription.paymentFailed(today);
+                yield true;
+            }
+        };
+    }
+
+    private Invoice newInvoice(Subscription subscription, LocalDate issuedOn, List<InvoiceLine> lines) {
+        return new Invoice(invoiceIds.next(), subscription.id(), subscription.customerId(), issuedOn, lines);
+    }
+
+    private void publishPendingEvents(Subscription subscription) {
+        for (SubscriptionEvent event : subscription.pullEvents()) {
+            eventPublisher.publish(event);
+        }
+    }
+
+    private Subscription load(SubscriptionId id) {
+        Objects.requireNonNull(id, "id");
+        return subscriptions.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown subscription " + id.value()));
+    }
+
+    private LocalDate today() {
+        return LocalDate.now(clock);
+    }
+
+    /** Mutable counters for one run. The caller only ever sees the immutable {@link BillingRunReport}. */
+    private static final class Tally {
+        private int renewed;
+        private int ended;
+        private int invoiced;
+        private int paymentsFailed;
+        private int skippedAlreadyInvoiced;
+
+        BillingRunReport toReport() {
+            return new BillingRunReport(renewed, ended, invoiced, paymentsFailed, skippedAlreadyInvoiced);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task25/domain/BillingPeriod.java -->
+**[`BillingPeriod.java`](../solutions/src/main/java/io/github/chris013/practice/task25/domain/BillingPeriod.java)**
+
+```java
+package io.github.chris013.practice.task25.domain;
+
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.Objects;
+
+/**
+ * Given. A half-open range of days, {@code start} inclusive and {@code endExclusive} not included.
+ *
+ * <p>Half-open ranges make adjacent periods line up without gaps or overlaps: January ends on the 1st of
+ * February, and that same day is the first day of the next period.
+ */
+public record BillingPeriod(LocalDate start, LocalDate endExclusive) {
+
+    public BillingPeriod {
+        Objects.requireNonNull(start, "start");
+        Objects.requireNonNull(endExclusive, "endExclusive");
+        if (!endExclusive.isAfter(start)) {
+            throw new IllegalArgumentException("A period must end after it starts: %s to %s".formatted(start, endExclusive));
+        }
+    }
+
+    /**
+     * One calendar month. {@link LocalDate#plusMonths} clamps the day of the month: January 31st plus one month is
+     * February 28th (29th in a leap year). That is the sensible answer to "one month later", but the anchor day
+     * is lost. A subscription that started on the 31st keeps billing on the 28th from then on.
+     */
+    public static BillingPeriod monthStartingOn(LocalDate start) {
+        Objects.requireNonNull(start, "start");
+        return new BillingPeriod(start, start.plusMonths(1));
+    }
+
+    public int lengthInDays() {
+        return (int) ChronoUnit.DAYS.between(start, endExclusive);
+    }
+
+    /** Days from {@code day} (inclusive) up to the end of the period. The day must be inside the period. */
+    public int daysRemainingFrom(LocalDate day) {
+        Objects.requireNonNull(day, "day");
+        if (day.isBefore(start) || !day.isBefore(endExclusive)) {
+            throw new IllegalArgumentException("%s is outside the period %s to %s".formatted(day, start, endExclusive));
+        }
+        return (int) ChronoUnit.DAYS.between(day, endExclusive);
+    }
+
+    /** The period that directly follows this one. */
+    public BillingPeriod next() {
+        return monthStartingOn(endExclusive);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task25/adapter/inmemory/InMemoryInvoices.java -->
+**[`InMemoryInvoices.java`](../solutions/src/main/java/io/github/chris013/practice/task25/adapter/inmemory/InMemoryInvoices.java)**
+
+```java
+package io.github.chris013.practice.task25.adapter.inmemory;
+
+import io.github.chris013.practice.task25.application.InvoiceRepository;
+import io.github.chris013.practice.task25.domain.Invoice;
+import io.github.chris013.practice.task25.domain.SubscriptionId;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+/** Keeps invoices in a list, in the order they were saved. For tests and local runs. */
+public final class InMemoryInvoices implements InvoiceRepository {
+
+    private final List<Invoice> all = new ArrayList<>();
+
+    @Override
+    public void save(Invoice invoice) {
+        all.add(Objects.requireNonNull(invoice, "invoice"));
+    }
+
+    @Override
+    public boolean existsFor(SubscriptionId subscriptionId, LocalDate periodStart) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId");
+        Objects.requireNonNull(periodStart, "periodStart");
+        return all.stream().anyMatch(invoice -> invoice.subscriptionId().equals(subscriptionId)
+                && invoice.issuedOn().equals(periodStart));
+    }
+
+    @Override
+    public List<Invoice> findBySubscription(SubscriptionId subscriptionId) {
+        Objects.requireNonNull(subscriptionId, "subscriptionId");
+        return all.stream().filter(invoice -> invoice.subscriptionId().equals(subscriptionId)).toList();
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

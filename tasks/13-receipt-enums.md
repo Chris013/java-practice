@@ -236,15 +236,431 @@ Four test classes cover the contract:
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task13/VatRateTest.java -->
+**[`VatRateTest.java`](../src/test/java/io/github/chris013/practice/task13/VatRateTest.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class VatRateTest {
+
+    @Nested
+    class Values {
+
+        @Test
+        void the_standard_rate_is_code_A_at_19_percent() {
+            assertThat(VatRate.STANDARD.code()).isEqualTo('A');
+            assertThat(VatRate.STANDARD.percent()).isEqualTo(19);
+        }
+
+        @Test
+        void the_reduced_rate_is_code_B_at_7_percent() {
+            assertThat(VatRate.REDUCED.code()).isEqualTo('B');
+            assertThat(VatRate.REDUCED.percent()).isEqualTo(7);
+        }
+    }
+
+    @Nested
+    class FromCode {
+
+        @ParameterizedTest
+        @CsvSource({"A, STANDARD", "B, REDUCED"})
+        void finds_the_rate_for_a_printed_code(char code, VatRate expected) {
+            assertThat(VatRate.fromCode(code)).isSameAs(expected);
+        }
+
+        @Test
+        void round_trips_every_rate_through_its_code() {
+            for (VatRate rate : VatRate.values()) {
+                assertThat(VatRate.fromCode(rate.code())).isSameAs(rate);
+            }
+        }
+
+        @Test
+        void rejects_an_unknown_code_and_names_it() {
+            assertThatThrownBy(() -> VatRate.fromCode('C'))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("'C'");
+        }
+
+        @Test
+        void codes_are_case_sensitive_as_printed() {
+            assertThatThrownBy(() -> VatRate.fromCode('a')).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task13/CategoryTest.java -->
+**[`CategoryTest.java`](../src/test/java/io/github/chris013/practice/task13/CategoryTest.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class CategoryTest {
+
+    @Nested
+    class VatAndAge {
+
+        @ParameterizedTest
+        @CsvSource({
+            "FRUIT_AND_VEGETABLES, REDUCED, 0, false",
+            "BAKERY, REDUCED, 0, false",
+            "DAIRY, REDUCED, 0, false",
+            "BOOKS, REDUCED, 0, false",
+            "SOFT_DRINKS, STANDARD, 0, false",
+            "BEER_AND_WINE, STANDARD, 16, true",
+            "SPIRITS, STANDARD, 18, true",
+            "TOBACCO, STANDARD, 18, true",
+            "HOUSEHOLD, STANDARD, 0, false"
+        })
+        void has_the_vat_rate_minimum_age_and_restriction_from_the_table(
+                Category category, VatRate rate, int minimumAge, boolean ageRestricted) {
+            assertThat(category.vatRate()).isSameAs(rate);
+            assertThat(category.minimumAge()).isEqualTo(minimumAge);
+            assertThat(category.isAgeRestricted()).isEqualTo(ageRestricted);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task13/LineItemTest.java -->
+**[`LineItemTest.java`](../src/test/java/io/github/chris013/practice/task13/LineItemTest.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class LineItemTest {
+
+    private static LineItem item(String price, int quantity) {
+        return new LineItem("Milk", Category.DAIRY, new BigDecimal(price), quantity);
+    }
+
+    @Nested
+    class Price {
+
+        @Test
+        void normalizes_the_price_to_two_decimal_places() {
+            assertThat(item("1.1", 1).unitPriceGross()).isEqualTo(new BigDecimal("1.10"));
+            assertThat(item("3", 1).unitPriceGross()).isEqualTo(new BigDecimal("3.00"));
+        }
+
+        @Test
+        void accepts_a_price_of_zero() {
+            assertThat(item("0.00", 1).unitPriceGross()).isEqualTo(new BigDecimal("0.00"));
+        }
+
+        @Test
+        void rejects_a_negative_price() {
+            assertThatThrownBy(() -> item("-0.01", 1)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_more_than_two_decimal_places_instead_of_rounding() {
+            assertThatThrownBy(() -> item("1.005", 1)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_missing_price() {
+            assertThatThrownBy(() -> new LineItem("Milk", Category.DAIRY, null, 1))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("unitPriceGross");
+        }
+    }
+
+    @Nested
+    class Quantity {
+
+        @Test
+        void accepts_a_quantity_of_one() {
+            assertThat(item("1.09", 1).quantity()).isEqualTo(1);
+        }
+
+        @Test
+        void rejects_a_quantity_of_zero() {
+            assertThatThrownBy(() -> item("1.09", 0)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_negative_quantity() {
+            assertThatThrownBy(() -> item("1.09", -2)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Name {
+
+        @Test
+        void rejects_a_blank_name() {
+            assertThatThrownBy(() -> new LineItem("  ", Category.DAIRY, new BigDecimal("1.09"), 1))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_missing_name() {
+            assertThatThrownBy(() -> new LineItem(null, Category.DAIRY, new BigDecimal("1.09"), 1))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("name");
+        }
+
+        @Test
+        void rejects_a_missing_category() {
+            assertThatThrownBy(() -> new LineItem("Milk", null, new BigDecimal("1.09"), 1))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("category");
+        }
+    }
+
+    @Nested
+    class Total {
+
+        @Test
+        void is_the_unit_price_times_the_quantity_with_scale_two() {
+            // 1.09 x 2 = 2.18
+            assertThat(item("1.09", 2).totalGross()).isEqualTo(new BigDecimal("2.18"));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task13/ReceiptTest.java -->
+**[`ReceiptTest.java`](../src/test/java/io/github/chris013/practice/task13/ReceiptTest.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.OptionalInt;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class ReceiptTest {
+
+    private static LineItem item(String name, Category category, String price, int quantity) {
+        return new LineItem(name, category, new BigDecimal(price), quantity);
+    }
+
+    private static BigDecimal amount(String value) {
+        return new BigDecimal(value);
+    }
+
+    /** The receipt from the task text: 1.99 + 2 x 1.09 (reduced) and 6 x 0.89 + 1.79 (standard). */
+    private static Receipt sampleReceipt() {
+        return Receipt.of(List.of(
+                item("Bananas", Category.FRUIT_AND_VEGETABLES, "1.99", 1),
+                item("Milk", Category.DAIRY, "1.09", 2),
+                item("Beer", Category.BEER_AND_WINE, "0.89", 6),
+                item("Dish soap", Category.HOUSEHOLD, "1.79", 1)));
+    }
+
+    @Nested
+    class Totals {
+
+        @Test
+        void adds_up_the_line_totals_with_scale_two() {
+            assertThat(sampleReceipt().totalGross()).isEqualTo(amount("11.30"));
+        }
+
+        @Test
+        void an_empty_receipt_has_zero_totals_and_nothing_to_show() {
+            Receipt empty = Receipt.of(List.of());
+
+            assertThat(empty.totalGross()).isEqualTo(amount("0.00"));
+            assertThat(empty.vatBreakdown()).isEmpty();
+            assertThat(empty.minimumAgeToVerify()).isEqualTo(OptionalInt.empty());
+            assertThat(empty.categories()).isEmpty();
+        }
+    }
+
+    @Nested
+    class VatBreakdown {
+
+        @Test
+        void shows_one_row_per_rate_with_gross_net_and_vat() {
+            Map<VatRate, VatLine> breakdown = sampleReceipt().vatBreakdown();
+
+            // Reduced: 4.17 gross, 4.17 x 7 / 107 = 0.2728 -> 0.27 VAT
+            assertThat(breakdown.get(VatRate.REDUCED))
+                    .isEqualTo(new VatLine(VatRate.REDUCED, amount("4.17"), amount("3.90"), amount("0.27")));
+            // Standard: 7.13 gross, 7.13 x 19 / 119 = 1.1384 -> 1.14 VAT
+            assertThat(breakdown.get(VatRate.STANDARD))
+                    .isEqualTo(new VatLine(VatRate.STANDARD, amount("7.13"), amount("5.99"), amount("1.14")));
+        }
+
+        @Test
+        void the_rows_add_up_to_the_receipt_total() {
+            BigDecimal sum = sampleReceipt().vatBreakdown().values().stream()
+                    .map(VatLine::gross)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            assertThat(sum).isEqualByComparingTo(sampleReceipt().totalGross());
+        }
+
+        @Test
+        void computes_the_vat_out_of_a_gross_price() {
+            // 10.00 x 19 / 119 = 1.5966 -> 1.60, so the net is 8.40
+            Receipt receipt = Receipt.of(List.of(item("Cola", Category.SOFT_DRINKS, "10.00", 1)));
+
+            assertThat(receipt.vatBreakdown().get(VatRate.STANDARD))
+                    .isEqualTo(new VatLine(VatRate.STANDARD, amount("10.00"), amount("8.40"), amount("1.60")));
+        }
+
+        @Test
+        void rounds_the_vat_once_per_rate_not_once_per_line() {
+            // Three lines of 0.10 at 19 percent.
+            // Per line: 0.10 x 19 / 119 = 0.0160 -> 0.02 each, 0.06 in total. That is wrong.
+            // Per rate: 0.30 x 19 / 119 = 0.0479 -> 0.05. That is the rule.
+            Receipt receipt = Receipt.of(List.of(
+                    item("Sparkling water", Category.SOFT_DRINKS, "0.10", 1),
+                    item("Lemonade", Category.SOFT_DRINKS, "0.10", 1),
+                    item("Tonic", Category.SOFT_DRINKS, "0.10", 1)));
+
+            assertThat(receipt.vatBreakdown().get(VatRate.STANDARD))
+                    .isEqualTo(new VatLine(VatRate.STANDARD, amount("0.30"), amount("0.25"), amount("0.05")));
+        }
+
+        @Test
+        void has_only_the_rates_that_occur_on_the_receipt() {
+            Receipt milkOnly = Receipt.of(List.of(item("Milk", Category.DAIRY, "1.09", 2)));
+
+            // 2.18 x 7 / 107 = 0.1426 -> 0.14, net 2.04
+            assertThat(milkOnly.vatBreakdown()).containsOnlyKeys(VatRate.REDUCED);
+            assertThat(milkOnly.vatBreakdown().get(VatRate.REDUCED))
+                    .isEqualTo(new VatLine(VatRate.REDUCED, amount("2.18"), amount("2.04"), amount("0.14")));
+        }
+
+        @Test
+        void lists_the_rates_in_enum_order_whatever_the_scan_order() {
+            // Reduced item scanned first, but STANDARD (A) comes first in the breakdown.
+            Receipt receipt = Receipt.of(List.of(
+                    item("Bread", Category.BAKERY, "2.00", 1),
+                    item("Beer", Category.BEER_AND_WINE, "1.00", 1)));
+
+            assertThat(receipt.vatBreakdown().keySet()).containsExactly(VatRate.STANDARD, VatRate.REDUCED);
+        }
+
+        @Test
+        void the_breakdown_cannot_be_changed() {
+            Map<VatRate, VatLine> breakdown = sampleReceipt().vatBreakdown();
+
+            assertThatThrownBy(breakdown::clear).isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Nested
+    class AgeCheck {
+
+        @Test
+        void needs_no_check_when_nothing_is_restricted() {
+            Receipt receipt = Receipt.of(List.of(
+                    item("Bread", Category.BAKERY, "2.00", 1),
+                    item("Cola", Category.SOFT_DRINKS, "1.20", 2)));
+
+            assertThat(receipt.minimumAgeToVerify()).isEqualTo(OptionalInt.empty());
+        }
+
+        @Test
+        void needs_sixteen_for_beer_and_wine() {
+            Receipt receipt = Receipt.of(List.of(
+                    item("Milk", Category.DAIRY, "1.09", 1),
+                    item("Beer", Category.BEER_AND_WINE, "0.89", 6)));
+
+            assertThat(receipt.minimumAgeToVerify()).isEqualTo(OptionalInt.of(16));
+        }
+
+        @Test
+        void needs_eighteen_when_beer_and_tobacco_are_mixed() {
+            Receipt receipt = Receipt.of(List.of(
+                    item("Beer", Category.BEER_AND_WINE, "0.89", 6),
+                    item("Tobacco", Category.TOBACCO, "7.50", 1)));
+
+            assertThat(receipt.minimumAgeToVerify()).isEqualTo(OptionalInt.of(18));
+        }
+    }
+
+    @Nested
+    class Categories {
+
+        @Test
+        void lists_each_category_once_in_enum_order() {
+            Receipt receipt = Receipt.of(List.of(
+                    item("Beer", Category.BEER_AND_WINE, "0.89", 1),
+                    item("Yoghurt", Category.DAIRY, "0.49", 1),
+                    item("Cheese", Category.DAIRY, "2.99", 1)));
+
+            assertThat(receipt.categories()).containsExactly(Category.DAIRY, Category.BEER_AND_WINE);
+        }
+
+        @Test
+        void the_categories_cannot_be_changed() {
+            assertThat(sampleReceipt().categories()).hasSize(4);
+            assertThatThrownBy(() -> sampleReceipt().categories().clear())
+                    .isInstanceOf(UnsupportedOperationException.class);
+        }
+    }
+
+    @Nested
+    class DefensiveCopy {
+
+        @Test
+        void a_later_change_to_the_callers_list_does_not_change_the_receipt() {
+            List<LineItem> scanned = new ArrayList<>();
+            scanned.add(item("Milk", Category.DAIRY, "1.09", 1));
+            Receipt receipt = Receipt.of(scanned);
+
+            scanned.add(item("Beer", Category.BEER_AND_WINE, "0.89", 1));
+
+            assertThat(receipt.items()).hasSize(1);
+            assertThat(receipt.totalGross()).isEqualTo(amount("1.09"));
+        }
+
+        @Test
+        void the_items_cannot_be_changed_through_the_receipt() {
+            Receipt receipt = sampleReceipt();
+
+            assertThat(receipt.items()).hasSize(4);
+            assertThatThrownBy(() -> receipt.items().clear()).isInstanceOf(UnsupportedOperationException.class);
+        }
+
+        @Test
+        void rejects_a_missing_list_and_a_missing_item() {
+            assertThatThrownBy(() -> Receipt.of(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> Receipt.of(Arrays.asList(item("Milk", Category.DAIRY, "1.09", 1), null)))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -293,15 +709,257 @@ Four test classes cover the contract:
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task13/VatRate.java -->
+**[`VatRate.java`](../solutions/src/main/java/io/github/chris013/practice/task13/VatRate.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+/**
+ * The two German VAT rates a supermarket receipt can show. The codes {@code A} and {@code B} are what the
+ * printed receipt says next to each line.
+ *
+ * <p>Task 13: read {@code tasks/13-receipt-enums.md} first.
+ */
+public enum VatRate {
+
+    STANDARD('A', 19),
+    REDUCED('B', 7);
+
+    private final char code;
+    private final int percent;
+
+    VatRate(char code, int percent) {
+        this.code = code;
+        this.percent = percent;
+    }
+
+    /** The one-letter code printed on the receipt. */
+    public char code() {
+        return code;
+    }
+
+    /** The rate in percent, for example {@code 19} for {@link #STANDARD}. */
+    public int percent() {
+        return percent;
+    }
+
+    /**
+     * Finds the rate for a printed code. Codes are case-sensitive, exactly as printed.
+     *
+     * <p>A loop over {@link #values()} is plenty for two constants. A static {@code Map} would be the next
+     * step if the list ever grew into the hundreds.
+     *
+     * @throws IllegalArgumentException if no rate has this code
+     */
+    public static VatRate fromCode(char code) {
+        for (VatRate rate : values()) {
+            if (rate.code == code) {
+                return rate;
+            }
+        }
+        throw new IllegalArgumentException("Unknown VAT code '" + code + "'");
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task13/Category.java -->
+**[`Category.java`](../solutions/src/main/java/io/github/chris013/practice/task13/Category.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+/**
+ * What a product is, for the till. Each category knows its own VAT rate and minimum age, so the rest of the code
+ * never needs a {@code switch} on the category. Adding a category is one line here and nothing else.
+ */
+public enum Category {
+
+    FRUIT_AND_VEGETABLES(VatRate.REDUCED, 0),
+    BAKERY(VatRate.REDUCED, 0),
+    DAIRY(VatRate.REDUCED, 0),
+    BOOKS(VatRate.REDUCED, 0),
+    SOFT_DRINKS(VatRate.STANDARD, 0),
+    BEER_AND_WINE(VatRate.STANDARD, 16),
+    SPIRITS(VatRate.STANDARD, 18),
+    TOBACCO(VatRate.STANDARD, 18),
+    HOUSEHOLD(VatRate.STANDARD, 0);
+
+    private final VatRate vatRate;
+    private final int minimumAge;
+
+    Category(VatRate vatRate, int minimumAge) {
+        this.vatRate = vatRate;
+        this.minimumAge = minimumAge;
+    }
+
+    /** The VAT rate that applies to products in this category. */
+    public VatRate vatRate() {
+        return vatRate;
+    }
+
+    /** The age the cashier must verify, or {@code 0} when no check is needed. */
+    public int minimumAge() {
+        return minimumAge;
+    }
+
+    /** {@code true} when the till must ask for ID before selling this category. */
+    public boolean isAgeRestricted() {
+        return minimumAge > 0;
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task13/LineItem.java -->
+**[`LineItem.java`](../solutions/src/main/java/io/github/chris013/practice/task13/LineItem.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+import java.math.BigDecimal;
+import java.util.Objects;
+
+/**
+ * One scanned product, with the number of items bought.
+ *
+ * <p>Prices are gross: they include VAT, as the shelf price does. The price is stored with scale 2, so
+ * {@code 1.1} becomes {@code 1.10} and always prints as money.
+ */
+public record LineItem(String name, Category category, BigDecimal unitPriceGross, int quantity) {
+
+    public LineItem {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(category, "category");
+        Objects.requireNonNull(unitPriceGross, "unitPriceGross");
+        if (name.isBlank()) {
+            throw new IllegalArgumentException("name must not be blank");
+        }
+        if (unitPriceGross.signum() < 0) {
+            throw new IllegalArgumentException("price must not be negative, was " + unitPriceGross);
+        }
+        // Reject instead of rounding: a till must never silently change a price it was given.
+        if (unitPriceGross.scale() > 2) {
+            throw new IllegalArgumentException("price has more than two decimal places: " + unitPriceGross);
+        }
+        if (quantity < 1) {
+            throw new IllegalArgumentException("quantity must be at least 1, was " + quantity);
+        }
+        unitPriceGross = unitPriceGross.setScale(2);
+    }
+
+    /** The gross price of all items on this line: unit price times quantity. */
+    public BigDecimal totalGross() {
+        return unitPriceGross.multiply(BigDecimal.valueOf(quantity));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task13/Receipt.java -->
+**[`Receipt.java`](../solutions/src/main/java/io/github/chris013/practice/task13/Receipt.java)**
+
+```java
+package io.github.chris013.practice.task13;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.OptionalInt;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * The items of one shopping trip, with the totals the receipt has to print.
+ *
+ * <p>Task 13: read {@code tasks/13-receipt-enums.md} first.
+ */
+public final class Receipt {
+
+    private static final BigDecimal ZERO = new BigDecimal("0.00");
+
+    private final List<LineItem> items;
+
+    private Receipt(List<LineItem> items) {
+        this.items = items;
+    }
+
+    /**
+     * Creates a receipt. The list is copied, so later changes to the caller's list do not affect the receipt.
+     * An empty receipt is allowed: its totals are zero and it has no breakdown rows.
+     */
+    public static Receipt of(List<LineItem> items) {
+        Objects.requireNonNull(items, "items");
+        return new Receipt(List.copyOf(items));
+    }
+
+    /** The items, in the order they were scanned. The returned list cannot be changed. */
+    public List<LineItem> items() {
+        return items;
+    }
+
+    /** The sum of all line totals, with scale 2. The start value has scale 2 so an empty receipt prints 0.00. */
+    public BigDecimal totalGross() {
+        return items.stream().map(LineItem::totalGross).reduce(ZERO, BigDecimal::add);
+    }
+
+    /**
+     * One {@link VatLine} per rate that occurs on the receipt, in enum order ({@code A} before {@code B}).
+     *
+     * <p>VAT is computed per rate on the sum of the gross amounts of that rate, rounded once. This is the method
+     * the tax office expects on the receipt. Rounding each line on its own adds up to a different amount.
+     */
+    public Map<VatRate, VatLine> vatBreakdown() {
+        Map<VatRate, BigDecimal> grossByRate = items.stream()
+                .collect(Collectors.groupingBy(
+                        item -> item.category().vatRate(),
+                        () -> new EnumMap<>(VatRate.class),
+                        Collectors.reducing(ZERO, LineItem::totalGross, BigDecimal::add)));
+
+        Map<VatRate, VatLine> breakdown = new EnumMap<>(VatRate.class);
+        for (Map.Entry<VatRate, BigDecimal> entry : grossByRate.entrySet()) {
+            breakdown.put(entry.getKey(), vatLine(entry.getKey(), entry.getValue()));
+        }
+        return Collections.unmodifiableMap(breakdown);
+    }
+
+    /**
+     * Splits a gross amount into net and VAT. The VAT part of a gross price is {@code gross x p / (100 + p)}, not
+     * {@code gross x p / 100}, because the VAT is included in the price.
+     */
+    private static VatLine vatLine(VatRate rate, BigDecimal gross) {
+        int percent = rate.percent();
+        BigDecimal vat = gross.multiply(BigDecimal.valueOf(percent))
+                .divide(BigDecimal.valueOf(100L + percent), 2, RoundingMode.HALF_UP);
+        return new VatLine(rate, gross, gross.subtract(vat), vat);
+    }
+
+    /**
+     * The highest minimum age of any item, or empty when no item is age-restricted. Items with age {@code 0}
+     * are filtered out first, so an unrestricted receipt gives empty, not {@code 0}.
+     */
+    public OptionalInt minimumAgeToVerify() {
+        return items.stream()
+                .mapToInt(item -> item.category().minimumAge())
+                .filter(age -> age > 0)
+                .max();
+    }
+
+    /** The categories on the receipt, in enum order. The returned set cannot be changed. */
+    public Set<Category> categories() {
+        EnumSet<Category> categories = EnumSet.noneOf(Category.class);
+        for (LineItem item : items) {
+            categories.add(item.category());
+        }
+        return Collections.unmodifiableSet(categories);
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

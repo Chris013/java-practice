@@ -75,10 +75,13 @@ Leave the embed markers **empty**. `java tools/EmbedCode.java` fills them (it wr
 ## Checklist before you hand in a task
 
 ```bash
-mvn -B -q test-compile                                   # starter compiles
+mvn -B clean test-compile 2>&1 | grep -E '^\[WARNING\] /|ERROR'               # starter: no errors, no warnings
+mvn -B clean test-compile -Psolutions 2>&1 | grep -E '^\[WARNING\] /|ERROR'   # solution: the same
 mvn -B test -Dtest='**/taskNN/**'                        # new-behaviour tests FAIL on the starter (characterization tests pass)
 mvn -B test -Psolutions -Dtest='**/taskNN/**'            # everything passes on the solution
 java tools/EmbedCode.java && java tools/EmbedCode.java --check
 ```
+
+Always build with `clean` and without `-q`: an incremental build skips unchanged files, and `-q` hides compiler warnings.
 
 Then add the task to the index table in `README.md`.

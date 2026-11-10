@@ -136,12 +136,495 @@ Run: `mvn test -Dtest='**/task23/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task23/QuoteAggregatorTest.java -->
+**[`QuoteAggregatorTest.java`](../src/test/java/io/github/chris013/practice/task23/QuoteAggregatorTest.java)**
+
+```java
+package io.github.chris013.practice.task23;
+
+import static io.github.chris013.practice.task23.FakeProvider.answering;
+import static io.github.chris013.practice.task23.FakeProvider.answeringAfter;
+import static io.github.chris013.practice.task23.FakeProvider.failing;
+import static io.github.chris013.practice.task23.FakeProvider.failingWith;
+import static io.github.chris013.practice.task23.FakeProvider.quote;
+import static io.github.chris013.practice.task23.FakeProvider.slowAnswering;
+import static io.github.chris013.practice.task23.FakeProvider.throwingError;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import io.github.chris013.practice.task23.FakeProvider.Hanging;
+import io.github.chris013.practice.task23.ProviderFailure.Reason;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.atomic.AtomicReference;
+import org.assertj.core.groups.Tuple;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class QuoteAggregatorTest {
+
+    private static final TripRequest REQUEST = new TripRequest("AMS", "LIS", LocalDate.of(2027, 3, 1), 2);
+    private static final Duration BUDGET = Duration.ofMillis(200);
+
+    @Nested
+    class AllProvidersAnswer {
+
+        @Test
+        void returns_all_quotes_sorted_by_price_and_is_complete() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(
+                    answering("KLM", quote("KLM", "149.00", "KL1601")),
+                    answering("TAP", quote("TAP", "99.90", "TP1234"), quote("TAP", "120.00", "TP1236"))), BUDGET)) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.quotes()).extracting(Quote::price).containsExactly(
+                        new BigDecimal("99.90"), new BigDecimal("120.00"),
+                        new BigDecimal("149.00"));
+                assertThat(result.failures()).isEmpty();
+                assertThat(result.isComplete()).isTrue();
+                assertThat(result.cheapest()).map(Quote::provider).contains("TAP");
+            }
+        }
+
+        @Test
+        void breaks_price_ties_by_provider_name_then_flight_number() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(
+                    answering("Iberia", quote("Iberia", "100.00", "IB2")),
+                    answering("Air France", quote("Air France", "100.00", "AF9")),
+                    answering("Iberia Express", quote("Iberia", "100.00", "IB1"))), BUDGET)) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.quotes()).extracting(Quote::provider, Quote::flightNumber).containsExactly(
+                        Tuple.tuple("Air France", "AF9"),
+                        Tuple.tuple("Iberia", "IB1"),
+                        Tuple.tuple("Iberia", "IB2"));
+            }
+        }
+
+        @Test
+        void has_no_cheapest_quote_when_nobody_quoted() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(answering("Empty")), BUDGET)) {
+                assertThat(aggregator.quotesFor(REQUEST).cheapest()).isEmpty();
+            }
+        }
+    }
+
+    @Nested
+    class OneProviderFails {
+
+        @Test
+        void keeps_the_other_quotes_and_reports_the_error_with_its_message() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(
+                    failing("Broken"),
+                    answering("TAP", quote("TAP", "99.90", "TP1234"))), BUDGET)) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.quotes()).extracting(Quote::provider).containsExactly("TAP");
+                assertThat(result.failures()).containsExactly(
+                        new ProviderFailure("Broken", Reason.ERROR, "IOException: 503"));
+                assertThat(result.isComplete()).isFalse();
+            }
+        }
+
+        @Test
+        void gives_no_quotes_and_no_cheapest_when_every_provider_fails() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(failing("A"), failing("B")), BUDGET)) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.quotes()).isEmpty();
+                assertThat(result.cheapest()).isEmpty();
+                assertThat(result.failures()).extracting(ProviderFailure::provider).containsExactly("A", "B");
+            }
+        }
+
+        @Test
+        void reports_only_the_class_name_when_the_exception_has_no_message() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(
+                    failingWith("Silent", new IllegalStateException())), BUDGET)) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.failures()).containsExactly(
+                        new ProviderFailure("Silent", Reason.ERROR, "IllegalStateException"));
+            }
+        }
+
+        @Test
+        void an_error_in_a_provider_is_not_turned_into_a_failure() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(throwingError("Broken")), BUDGET)) {
+                assertThatThrownBy(() -> aggregator.quotesFor(REQUEST))
+                        .isInstanceOf(StackOverflowError.class);
+            }
+        }
+    }
+
+    @Nested
+    class TimeBudget {
+
+        @Test
+        void a_hanging_provider_is_reported_as_timeout_after_about_the_budget() throws Exception {
+            Hanging hanging = FakeProvider.hanging("Stuck");
+            try (var aggregator = new QuoteAggregator(List.of(hanging), BUDGET)) {
+                long start = System.nanoTime();
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+                assertThat(elapsed).isLessThan(Duration.ofMillis(1_500));
+                assertThat(elapsed).isGreaterThanOrEqualTo(Duration.ofMillis(150));
+                assertThat(result.quotes()).isEmpty();
+                assertThat(result.failures()).extracting(ProviderFailure::reason).containsExactly(Reason.TIMEOUT);
+            }
+        }
+
+        @Test
+        void a_hanging_provider_is_interrupted_when_the_budget_expires() throws Exception {
+            Hanging hanging = FakeProvider.hanging("Stuck");
+            try (var aggregator = new QuoteAggregator(List.of(hanging), BUDGET)) {
+                aggregator.quotesFor(REQUEST);
+
+                assertThat(hanging.awaitInterrupted(Duration.ofSeconds(1))).isTrue();
+            }
+        }
+
+        @Test
+        void keeps_a_provider_that_answers_within_the_budget() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(
+                    slowAnswering("Slow", Duration.ofMillis(50), quote("Slow", "80.00", "SL1")),
+                    FakeProvider.hanging("Stuck")), BUDGET)) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.quotes()).extracting(Quote::provider).containsExactly("Slow");
+                assertThat(result.failures()).extracting(ProviderFailure::provider).containsExactly("Stuck");
+            }
+        }
+
+        @Test
+        void the_budget_is_shared_by_all_providers_not_added_up_per_provider() throws Exception {
+            // Four hanging providers. Waiting for each one in turn with its own timeout would take 4 x 200 ms.
+            try (var aggregator = new QuoteAggregator(List.of(
+                    FakeProvider.hanging("A"), FakeProvider.hanging("B"),
+                    FakeProvider.hanging("C"), FakeProvider.hanging("D")), BUDGET)) {
+                long start = System.nanoTime();
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+                assertThat(elapsed).isLessThan(Duration.ofMillis(700));
+                assertThat(result.failures()).hasSize(4);
+            }
+        }
+    }
+
+    @Nested
+    class Parallelism {
+
+        @Test
+        void providers_run_at_the_same_time() throws Exception {
+            // If the providers ran one after another, the first would wait at the barrier until the budget
+            // expired, and the result would not be complete.
+            CyclicBarrier barrier = new CyclicBarrier(5);
+            List<QuoteProvider> providers = List.of(
+                    answeringAfter("P1", barrier, quote("P1", "10.00", "F1")),
+                    answeringAfter("P2", barrier, quote("P2", "10.00", "F2")),
+                    answeringAfter("P3", barrier, quote("P3", "10.00", "F3")),
+                    answeringAfter("P4", barrier, quote("P4", "10.00", "F4")),
+                    answeringAfter("P5", barrier, quote("P5", "10.00", "F5")));
+            try (var aggregator = new QuoteAggregator(providers, Duration.ofSeconds(1))) {
+
+                AggregatedQuotes result = aggregator.quotesFor(REQUEST);
+
+                assertThat(result.quotes()).hasSize(5);
+                assertThat(result.isComplete()).isTrue();
+            }
+        }
+    }
+
+    @Nested
+    class CallerInterrupted {
+
+        @Test
+        void throws_interrupted_exception_and_cancels_the_providers() throws Exception {
+            Hanging hanging = FakeProvider.hanging("Stuck");
+            AtomicReference<InterruptedException> thrown = new AtomicReference<>();
+            try (var aggregator = new QuoteAggregator(List.of(hanging), Duration.ofSeconds(10))) {
+                Thread caller = Thread.ofVirtual().start(() -> {
+                    try {
+                        aggregator.quotesFor(REQUEST);
+                    } catch (InterruptedException e) {
+                        thrown.set(e);
+                    }
+                });
+
+                assertThat(hanging.awaitStarted(Duration.ofSeconds(1))).isTrue();
+                caller.interrupt();
+
+                assertThat(caller.join(Duration.ofSeconds(2))).isTrue();
+                assertThat(thrown.get()).isInstanceOf(InterruptedException.class);
+                assertThat(hanging.awaitInterrupted(Duration.ofSeconds(1))).isTrue();
+            }
+        }
+    }
+
+    @Nested
+    class Closing {
+
+        @Test
+        void close_interrupts_a_search_that_is_still_running() throws Exception {
+            Hanging hanging = FakeProvider.hanging("Stuck");
+            var aggregator = new QuoteAggregator(List.of(hanging), Duration.ofSeconds(10));
+            try {
+                AtomicReference<AggregatedQuotes> result = new AtomicReference<>();
+                Thread caller = Thread.ofVirtual().start(() -> {
+                    try {
+                        result.set(aggregator.quotesFor(REQUEST));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                assertThat(hanging.awaitStarted(Duration.ofSeconds(1))).isTrue();
+
+                Thread closer = Thread.ofVirtual().start(aggregator::close);
+
+                assertThat(hanging.awaitInterrupted(Duration.ofSeconds(1))).isTrue();
+                assertThat(closer.join(Duration.ofSeconds(1))).isTrue();
+                assertThat(caller.join(Duration.ofSeconds(1))).isTrue();
+                assertThat(result.get().failures())
+                        .containsExactly(new ProviderFailure("Stuck", Reason.ERROR, "InterruptedException"));
+            } finally {
+                aggregator.close(); // closing twice is harmless
+            }
+        }
+    }
+
+    @Nested
+    class Construction {
+
+        @Test
+        void rejects_a_null_budget_naming_the_parameter() {
+            assertThatThrownBy(() -> new QuoteAggregator(List.of(answering("A")), null))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("budget");
+        }
+
+        @Test
+        void rejects_an_empty_provider_list() {
+            assertThatThrownBy(() -> new QuoteAggregator(List.of(), BUDGET))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_null_providers_naming_the_parameter() {
+            assertThatThrownBy(() -> new QuoteAggregator(null, BUDGET))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("providers");
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0", "-1"})
+        void rejects_a_budget_that_is_not_positive(long millis) {
+            assertThatThrownBy(() -> new QuoteAggregator(List.of(answering("A")), Duration.ofMillis(millis)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_null_request() throws Exception {
+            try (var aggregator = new QuoteAggregator(List.of(answering("A")), BUDGET)) {
+                assertThatThrownBy(() -> aggregator.quotesFor(null))
+                        .isInstanceOf(NullPointerException.class)
+                        .hasMessageContaining("request");
+            }
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task23/FakeProvider.java -->
+**[`FakeProvider.java`](../src/test/java/io/github/chris013/practice/task23/FakeProvider.java)**
+
+```java
+package io.github.chris013.practice.task23;
+
+import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+/** Hand-written provider fakes. Each factory method describes one behaviour. */
+final class FakeProvider implements QuoteProvider {
+
+    @FunctionalInterface
+    interface Behaviour {
+        List<Quote> respond(TripRequest request) throws Exception;
+    }
+
+    private final String name;
+    private final Behaviour behaviour;
+
+    private FakeProvider(String name, Behaviour behaviour) {
+        this.name = name;
+        this.behaviour = behaviour;
+    }
+
+    static Quote quote(String provider, String price, String flight) {
+        return new Quote(provider, new BigDecimal(price), flight);
+    }
+
+    static QuoteProvider answering(String name, Quote... quotes) {
+        List<Quote> answer = List.of(quotes);
+        return new FakeProvider(name, request -> answer);
+    }
+
+    static QuoteProvider failing(String name) {
+        return failingWith(name, new IOException("503"));
+    }
+
+    static QuoteProvider failingWith(String name, Exception failure) {
+        return new FakeProvider(name, request -> {
+            throw failure;
+        });
+    }
+
+    static QuoteProvider throwingError(String name) {
+        return new FakeProvider(name, request -> {
+            throw new StackOverflowError("test");
+        });
+    }
+
+    /** Answers after a short delay. Keep the delay well below the budget used in the test. */
+    static QuoteProvider slowAnswering(String name, Duration delay, Quote... quotes) {
+        List<Quote> answer = List.of(quotes);
+        return new FakeProvider(name, request -> {
+            Thread.sleep(delay.toMillis());
+            return answer;
+        });
+    }
+
+    /** Waits on a barrier, so it only answers if all barrier parties are running at the same time. */
+    static QuoteProvider answeringAfter(String name, CyclicBarrier barrier, Quote quote) {
+        return new FakeProvider(name, request -> {
+            barrier.await(1, TimeUnit.SECONDS);
+            return List.of(quote);
+        });
+    }
+
+    static Hanging hanging(String name) {
+        return new Hanging(name);
+    }
+
+    @Override
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public List<Quote> quotesFor(TripRequest request) throws Exception {
+        return behaviour.respond(request);
+    }
+
+    /** Never answers. Records whether it was interrupted, so a test can check the cancellation. */
+    static final class Hanging implements QuoteProvider {
+
+        private final String name;
+        private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch neverReleased = new CountDownLatch(1);
+        private final CountDownLatch interruptedSignal = new CountDownLatch(1);
+        private final AtomicBoolean interrupted = new AtomicBoolean();
+
+        private Hanging(String name) {
+            this.name = name;
+        }
+
+        @Override
+        public String name() {
+            return name;
+        }
+
+        @Override
+        public List<Quote> quotesFor(TripRequest request) throws InterruptedException {
+            started.countDown();
+            try {
+                neverReleased.await();
+                return List.of();
+            } catch (InterruptedException e) {
+                interrupted.set(true);
+                interruptedSignal.countDown();
+                throw e;
+            }
+        }
+
+        /** Waits until this provider has started running, so the test does not race the start. */
+        boolean awaitStarted(Duration timeout) throws InterruptedException {
+            return started.await(timeout.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        /** Waits until the cancellation has reached this provider. The interrupt is asynchronous. */
+        boolean awaitInterrupted(Duration timeout) throws InterruptedException {
+            return interruptedSignal.await(timeout.toMillis(), TimeUnit.MILLISECONDS) && interrupted.get();
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task23/ValueValidationTest.java -->
+**[`ValueValidationTest.java`](../src/test/java/io/github/chris013/practice/task23/ValueValidationTest.java)**
+
+```java
+package io.github.chris013.practice.task23;
+
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class ValueValidationTest {
+
+    private static final LocalDate DEPARTURE = LocalDate.of(2027, 3, 1);
+
+    @ParameterizedTest
+    @CsvSource({"am,LIS,1", "AMSS,LIS,1", "AM,LIS,1", "AMS,LIS,0", "AMS,LIS,10"})
+    void rejects_a_bad_iata_code_or_passenger_count(String from, String to, int passengers) {
+        assertThatThrownBy(() -> new TripRequest(from, to, DEPARTURE, passengers))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void accepts_the_boundaries_of_the_passenger_count() {
+        new TripRequest("AMS", "LIS", DEPARTURE, 1);
+        new TripRequest("AMS", "LIS", DEPARTURE, 9);
+    }
+
+    @ParameterizedTest
+    @CsvSource({"0.00", "-1.00", "12", "12.5", "12.000"})
+    void rejects_a_price_that_is_not_positive_with_exactly_two_decimals(String price) {
+        assertThatThrownBy(() -> new Quote("TAP", new BigDecimal(price), "TP1"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void accepts_a_price_with_two_decimals() {
+        new Quote("TAP", new BigDecimal("0.01"), "TP1");
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -188,6 +671,113 @@ Run: `mvn test -Dtest='**/task23/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task23/QuoteAggregator.java -->
+**[`QuoteAggregator.java`](../solutions/src/main/java/io/github/chris013/practice/task23/QuoteAggregator.java)**
+
+```java
+package io.github.chris013.practice.task23;
+
+import io.github.chris013.practice.task23.ProviderFailure.Reason;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Asks all providers at the same time and returns after at most {@code budget}.
+ *
+ * <p>Each provider runs on its own virtual thread. Virtual threads make a blocking HTTP call cheap, so we
+ * can simply block and let the scheduler park the thread. The budget is one deadline for the whole search,
+ * not one per provider: all providers start at the same moment, so the slowest one decides the wait.
+ *
+ * <p>Task 23: read {@code tasks/23-quote-aggregator.md} first.
+ */
+public final class QuoteAggregator implements AutoCloseable {
+
+    private final List<QuoteProvider> providers;
+    private final Duration budget;
+    private final ExecutorService executor;
+
+    /**
+     * @throws IllegalArgumentException if {@code providers} is empty or {@code budget} is not positive
+     */
+    public QuoteAggregator(List<QuoteProvider> providers, Duration budget) {
+        Objects.requireNonNull(providers, "providers");
+        Objects.requireNonNull(budget, "budget");
+        if (providers.isEmpty()) {
+            throw new IllegalArgumentException("At least one quote provider is needed");
+        }
+        if (budget.isNegative() || budget.isZero()) {
+            throw new IllegalArgumentException("The budget must be positive, got " + budget);
+        }
+        this.providers = List.copyOf(providers);
+        this.budget = budget;
+        // Created last, so a failed validation above does not leak an executor.
+        this.executor = Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    /**
+     * Calls every provider concurrently and waits at most the budget in total. Providers that have not
+     * answered by then are cancelled with interruption and reported as {@link Reason#TIMEOUT}.
+     *
+     * <p>We declare {@code InterruptedException} instead of swallowing it. If the caller's thread is
+     * interrupted, {@code invokeAll} cancels the provider tasks too, and the caller decides what to do.
+     *
+     * @throws InterruptedException if the calling thread is interrupted while waiting
+     */
+    public AggregatedQuotes quotesFor(TripRequest request) throws InterruptedException {
+        Objects.requireNonNull(request, "request");
+        List<Callable<List<Quote>>> tasks = providers.stream()
+                .<Callable<List<Quote>>>map(provider -> () -> provider.quotesFor(request))
+                .toList();
+
+        // invokeAll returns once every task is done, or when the budget runs out. Unfinished tasks are
+        // cancelled with interruption. The futures come back in the same order as the tasks.
+        List<Future<List<Quote>>> futures = executor.invokeAll(tasks, budget.toNanos(), TimeUnit.NANOSECONDS);
+
+        List<Quote> quotes = new ArrayList<>();
+        List<ProviderFailure> failures = new ArrayList<>();
+        for (int i = 0; i < futures.size(); i++) {
+            String provider = providers.get(i).name();
+            Future<List<Quote>> future = futures.get(i);
+            switch (future.state()) {
+                case SUCCESS -> quotes.addAll(future.resultNow());
+                case FAILED -> {
+                    Throwable cause = future.exceptionNow();
+                    if (cause instanceof Error error) {
+                        throw error; // a broken JVM or library, not an answer from the provider
+                    }
+                    failures.add(new ProviderFailure(provider, Reason.ERROR, describe(cause)));
+                }
+                case CANCELLED -> failures.add(new ProviderFailure(
+                        provider, Reason.TIMEOUT, "no answer within " + budget.toMillis() + " ms"));
+                case RUNNING -> throw new IllegalStateException("invokeAll returned before " + provider + " finished");
+            }
+        }
+        return new AggregatedQuotes(quotes, failures);
+    }
+
+    /**
+     * Shuts the executor down. {@code shutdownNow()} interrupts the providers that are still running, and
+     * {@code close()} then waits until they have reacted. A provider that ignores interruption would still
+     * block {@code close()}.
+     */
+    @Override
+    public void close() {
+        executor.shutdownNow();
+        executor.close();
+    }
+
+    private static String describe(Throwable failure) {
+        String type = failure.getClass().getSimpleName();
+        return failure.getMessage() == null ? type : type + ": " + failure.getMessage();
+    }
+}
+```
 <!-- /embed -->
 
 ### Sketch: the same idea with `StructuredTaskScope`

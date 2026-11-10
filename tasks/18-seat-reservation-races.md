@@ -171,12 +171,523 @@ On the starter 20 of 25 tests pass: all 19 in `SeatReservationServiceTest` and t
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task18/SeatReservationConcurrencyTest.java -->
+**[`SeatReservationConcurrencyTest.java`](../src/test/java/io/github/chris013/practice/task18/SeatReservationConcurrencyTest.java)**
+
+```java
+package io.github.chris013.practice.task18;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntConsumer;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+/**
+ * These tests fail on the racy starter and pass on the reference solution. Each one forces a specific interleaving
+ * with {@link YieldingClock} and with a start gate, so the failure is reproducible rather than a one-in-a-million event.
+ */
+class SeatReservationConcurrencyTest {
+
+    private static final Instant START = Instant.parse("2026-06-01T20:00:00Z");
+    private static final Duration HOLD = Duration.ofMinutes(5);
+    private static final SeatId A1 = new SeatId("A-1");
+    private static final CustomerId ANNA = new CustomerId("anna");
+
+    /**
+     * Starts {@code tasks} virtual threads, releases them all at the same moment, and waits for every one of them.
+     * An exception in any task is rethrown here, so a crash fails the test instead of disappearing.
+     */
+    private static void runConcurrently(int tasks, IntConsumer task) throws Exception {
+        CountDownLatch startGate = new CountDownLatch(1);
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < tasks; i++) {
+                int index = i;
+                futures.add(executor.submit(() -> {
+                    startGate.await();
+                    task.accept(index);
+                    return null;
+                }));
+            }
+            startGate.countDown();
+            for (Future<?> future : futures) {
+                future.get();
+            }
+        }
+    }
+
+    private static SeatId seat(int number) {
+        return new SeatId("S-%03d".formatted(number));
+    }
+
+    private static Set<SeatId> seats(int count) {
+        return IntStream.range(0, count).mapToObj(SeatReservationConcurrencyTest::seat).collect(Collectors.toSet());
+    }
+
+    @Nested
+    class Races {
+
+        @Test
+        void exactly_one_of_1000_customers_gets_a_seat_they_all_want() throws Exception {
+            // 20 rounds, each with a fresh service, so one lucky round cannot hide a broken hold.
+            for (int round = 0; round < 20; round++) {
+                var listener = new RecordingReservationListener();
+                var service = new SeatReservationService(Set.of(A1), new YieldingClock(START), HOLD, listener);
+                var winners = new AtomicInteger();
+
+                runConcurrently(1000, customer -> {
+                    if (service.hold(A1, new CustomerId("customer-" + customer)).isPresent()) {
+                        winners.incrementAndGet();
+                    }
+                });
+
+                assertThat(winners).as("round %d", round).hasValue(1);
+                assertThat(listener.held()).as("round %d", round).hasSize(1);
+            }
+        }
+
+        @Test
+        void no_sale_is_lost_when_200_customers_buy_200_different_seats_at_once() throws Exception {
+            // 20 rounds, each with a fresh service: a lost update is a rare interleaving, so one round is not enough.
+            for (int round = 0; round < 20; round++) {
+                var service = new SeatReservationService(seats(200), new YieldingClock(START), HOLD,
+                        new RecordingReservationListener());
+                var sold = new AtomicInteger();
+
+                runConcurrently(200, i -> {
+                    CustomerId customer = new CustomerId("customer-" + i);
+                    if (service.hold(seat(i), customer).isPresent() && service.confirm(seat(i), customer)) {
+                        sold.incrementAndGet();
+                    }
+                });
+
+                assertThat(sold).as("round %d", round).hasValue(200);
+                assertThat(service.soldCount()).as("round %d", round).isEqualTo(200);
+                assertThat(service.soldSeats()).as("round %d", round).hasSize(200).doesNotHaveDuplicates();
+            }
+        }
+
+        @Test
+        void a_customer_who_confirms_the_same_hold_from_50_threads_buys_the_seat_once() throws Exception {
+            for (int round = 0; round < 20; round++) {
+                var service = new SeatReservationService(Set.of(A1), new YieldingClock(START), HOLD,
+                        new RecordingReservationListener());
+                service.hold(A1, ANNA);
+                var confirmed = new AtomicInteger();
+
+                runConcurrently(50, i -> {
+                    if (service.confirm(A1, ANNA)) {
+                        confirmed.incrementAndGet();
+                    }
+                });
+
+                assertThat(confirmed).as("round %d", round).hasValue(1);
+                assertThat(service.soldSeats()).as("round %d", round).containsExactly(A1);
+            }
+        }
+    }
+
+    @Nested
+    class Iteration {
+
+        @Test
+        void iterating_the_sold_seats_while_another_thread_sells_does_not_throw() throws Exception {
+            var service = new SeatReservationService(seats(200), new YieldingClock(START), HOLD,
+                    new RecordingReservationListener());
+            for (int i = 0; i < 10; i++) {
+                service.hold(seat(i), new CustomerId("early-" + i));
+                service.confirm(seat(i), new CustomerId("early-" + i));
+            }
+
+            int visited = 0;
+            for (SeatId ignored : service.soldSeats()) {
+                if (visited == 0) {
+                    // Another thread sells the other 190 seats while this loop is in progress.
+                    Thread writer = Thread.ofVirtual().start(() -> {
+                        for (int i = 10; i < 200; i++) {
+                            CustomerId customer = new CustomerId("late-" + i);
+                            service.hold(seat(i), customer);
+                            service.confirm(seat(i), customer);
+                        }
+                    });
+                    writer.join();
+                }
+                visited++;
+            }
+
+            assertThat(visited).as("the loop sees the snapshot taken before the writer started").isEqualTo(10);
+            assertThat(service.soldCount()).isEqualTo(200);
+        }
+
+        @Test
+        void a_snapshot_taken_earlier_does_not_change_when_later_sales_happen() throws Exception {
+            var service = new SeatReservationService(seats(3), new YieldingClock(START), HOLD,
+                    new RecordingReservationListener());
+            service.hold(seat(0), ANNA);
+            service.confirm(seat(0), ANNA);
+            List<SeatId> snapshot = service.soldSeats();
+
+            runConcurrently(2, i -> {
+                CustomerId customer = new CustomerId("late-" + i);
+                service.hold(seat(i + 1), customer);
+                service.confirm(seat(i + 1), customer);
+            });
+
+            assertThat(snapshot).containsExactly(seat(0));
+            assertThat(service.soldSeats()).hasSize(3);
+        }
+    }
+
+    @Nested
+    class Callbacks {
+
+        /**
+         * Alien code: from another thread it releases the sold seat (a {@code compute} on the same key) and asks for
+         * the available count, then waits for the answer. If {@code seatSold} ran inside {@code compute} for that key,
+         * the other thread would block on the key and this listener would wait forever.
+         */
+        private static final class AskingListener implements ReservationListener {
+
+            private final ExecutorService executor;
+            private final AtomicInteger seenAvailable = new AtomicInteger(-1);
+            private SeatReservationService service;
+
+            AskingListener(ExecutorService executor) {
+                this.executor = executor;
+            }
+
+            void bindTo(SeatReservationService service) {
+                this.service = service;
+            }
+
+            @Override
+            public void seatHeld(Hold hold) {
+                // Not needed for this test.
+            }
+
+            @Override
+            public void seatSold(SeatId seat, CustomerId customer) {
+                try {
+                    seenAvailable.set(executor.submit(() -> {
+                        // compute on the same key: blocks if the caller is inside compute for that key
+                        service.release(seat, new CustomerId("someone-else"));
+                        return service.availableSeats();
+                    }).get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted while asking the service", e);
+                } catch (ExecutionException e) {
+                    throw new IllegalStateException("the service failed when asked from another thread", e);
+                }
+            }
+        }
+
+        @Test
+        void a_listener_may_call_back_into_the_service_from_another_thread_without_deadlock() {
+            ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+            try {
+                var listener = new AskingListener(executor);
+                var service = new SeatReservationService(Set.of(A1), new YieldingClock(START), HOLD, listener);
+                listener.bindTo(service);
+
+                assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+                    service.hold(A1, ANNA);
+                    assertThat(service.confirm(A1, ANNA)).isTrue();
+                });
+
+                assertThat(listener.seenAvailable).hasValue(0);
+            } finally {
+                executor.shutdownNow();
+            }
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task18/YieldingClock.java -->
+**[`YieldingClock.java`](../src/test/java/io/github/chris013/practice/task18/YieldingClock.java)**
+
+```java
+package io.github.chris013.practice.task18;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+
+/**
+ * A clock that always says the same time, but gives other threads a chance to run first on every reading.
+ *
+ * <p>This is a legitimate way to widen a race window. In production the same gap appears when a call to a database
+ * or to a remote service sits between the "check" and the "act". Here we make the gap wide on purpose, so the bug
+ * shows up in a test on every run instead of once in a million.
+ */
+final class YieldingClock extends Clock {
+
+    private final Instant now;
+
+    YieldingClock(Instant now) {
+        this.now = now;
+    }
+
+    @Override
+    public Instant instant() {
+        Thread.yield();
+        return now;
+    }
+
+    @Override
+    public ZoneId getZone() {
+        return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+        throw new UnsupportedOperationException("Not needed in these tests");
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task18/SeatReservationServiceTest.java -->
+**[`SeatReservationServiceTest.java`](../src/test/java/io/github/chris013/practice/task18/SeatReservationServiceTest.java)**
+
+```java
+package io.github.chris013.practice.task18;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Set;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class SeatReservationServiceTest {
+
+    private static final Instant START = Instant.parse("2026-06-01T20:00:00Z");
+    private static final Duration HOLD = Duration.ofMinutes(5);
+    private static final SeatId A1 = new SeatId("A-1");
+    private static final SeatId A2 = new SeatId("A-2");
+    private static final SeatId A3 = new SeatId("A-3");
+    private static final CustomerId ANNA = new CustomerId("anna");
+    private static final CustomerId BEN = new CustomerId("ben");
+
+    private final MutableClock clock = new MutableClock(START);
+    private final RecordingReservationListener listener = new RecordingReservationListener();
+    private final SeatReservationService service =
+            new SeatReservationService(Set.of(A1, A2, A3), clock, HOLD, listener);
+
+    @Nested
+    class Holding {
+
+        @Test
+        void a_free_seat_can_be_held_and_the_hold_expires_after_the_hold_duration() {
+            Hold hold = service.hold(A1, ANNA).orElseThrow();
+
+            assertThat(hold).isEqualTo(new Hold(A1, ANNA, START.plus(HOLD)));
+            assertThat(listener.held()).containsExactly(hold);
+        }
+
+        @Test
+        void a_held_seat_cannot_be_held_again_even_by_the_same_customer() {
+            service.hold(A1, ANNA);
+
+            assertThat(service.hold(A1, ANNA)).isEmpty();
+            assertThat(service.hold(A1, BEN)).isEmpty();
+            assertThat(listener.held()).hasSize(1);
+        }
+
+        @Test
+        void a_hold_still_counts_one_nanosecond_before_it_expires() {
+            service.hold(A1, ANNA);
+            clock.advanceBy(HOLD.minusNanos(1));
+
+            assertThat(service.hold(A1, BEN)).isEmpty();
+        }
+
+        @Test
+        void an_expired_hold_can_be_taken_by_someone_else_at_the_exact_expiry_instant() {
+            service.hold(A1, ANNA);
+            clock.advanceBy(HOLD);
+
+            Hold hold = service.hold(A1, BEN).orElseThrow();
+
+            assertThat(hold.customer()).isEqualTo(BEN);
+            assertThat(hold.expiresAt()).isEqualTo(START.plus(HOLD).plus(HOLD));
+        }
+
+        @Test
+        void a_sold_seat_cannot_be_held() {
+            service.hold(A1, ANNA);
+            service.confirm(A1, ANNA);
+
+            assertThat(service.hold(A1, BEN)).isEmpty();
+        }
+    }
+
+    @Nested
+    class Confirming {
+
+        @Test
+        void the_holder_can_confirm_and_the_seat_is_sold() {
+            service.hold(A1, ANNA);
+
+            assertThat(service.confirm(A1, ANNA)).isTrue();
+            assertThat(service.soldCount()).isEqualTo(1);
+            assertThat(listener.sold()).containsExactly(new RecordingReservationListener.SoldEvent(A1, ANNA));
+        }
+
+        @Test
+        void another_customer_cannot_confirm_someone_elses_hold() {
+            service.hold(A1, ANNA);
+
+            assertThat(service.confirm(A1, BEN)).isFalse();
+            assertThat(service.soldCount()).isZero();
+            assertThat(service.confirm(A1, ANNA)).as("the real holder still can").isTrue();
+        }
+
+        @Test
+        void an_expired_hold_cannot_be_confirmed() {
+            service.hold(A1, ANNA);
+            clock.advanceBy(HOLD);
+
+            assertThat(service.confirm(A1, ANNA)).isFalse();
+            assertThat(service.soldCount()).isZero();
+        }
+
+        @Test
+        void a_free_seat_cannot_be_confirmed() {
+            assertThat(service.confirm(A1, ANNA)).isFalse();
+            assertThat(listener.sold()).isEmpty();
+        }
+
+        @Test
+        void a_seat_can_only_be_sold_once() {
+            service.hold(A1, ANNA);
+            service.confirm(A1, ANNA);
+
+            assertThat(service.confirm(A1, ANNA)).isFalse();
+            assertThat(service.soldCount()).isEqualTo(1);
+            assertThat(listener.sold()).hasSize(1);
+        }
+    }
+
+    @Nested
+    class Releasing {
+
+        @Test
+        void releasing_your_own_hold_frees_the_seat_for_others() {
+            service.hold(A1, ANNA);
+
+            service.release(A1, ANNA);
+
+            assertThat(service.hold(A1, BEN)).isPresent();
+        }
+
+        @Test
+        void releasing_someone_elses_hold_does_nothing() {
+            service.hold(A1, ANNA);
+
+            service.release(A1, BEN);
+
+            assertThat(service.hold(A1, BEN)).isEmpty();
+            assertThat(service.confirm(A1, ANNA)).isTrue();
+        }
+
+        @Test
+        void releasing_a_sold_seat_does_nothing() {
+            service.hold(A1, ANNA);
+            service.confirm(A1, ANNA);
+
+            service.release(A1, ANNA);
+
+            assertThat(service.soldCount()).isEqualTo(1);
+            assertThat(service.hold(A1, BEN)).isEmpty();
+        }
+    }
+
+    @Nested
+    class Counting {
+
+        @Test
+        void every_seat_is_available_at_the_start() {
+            assertThat(service.availableSeats()).isEqualTo(3);
+            assertThat(service.soldCount()).isZero();
+            assertThat(service.soldSeats()).isEmpty();
+        }
+
+        @Test
+        void held_and_sold_seats_are_not_available_but_expired_holds_are() {
+            service.hold(A1, ANNA);
+            service.hold(A2, BEN);
+            service.confirm(A2, BEN);
+
+            assertThat(service.availableSeats()).isEqualTo(1);
+
+            clock.advanceBy(HOLD);
+
+            assertThat(service.availableSeats()).as("A-1's hold has expired, A-2 is still sold").isEqualTo(2);
+        }
+
+        @Test
+        void sold_seats_are_listed_in_the_order_they_were_sold() {
+            service.hold(A3, ANNA);
+            service.confirm(A3, ANNA);
+            service.hold(A1, BEN);
+            service.confirm(A1, BEN);
+
+            assertThat(service.soldSeats()).containsExactly(A3, A1);
+            assertThat(service.soldCount()).isEqualTo(2);
+        }
+    }
+
+    @Nested
+    class Validation {
+
+        @Test
+        void an_unknown_seat_is_rejected_by_every_operation() {
+            SeatId unknown = new SeatId("Z-99");
+
+            assertThatThrownBy(() -> service.hold(unknown, ANNA)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.confirm(unknown, ANNA)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> service.release(unknown, ANNA)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void the_hold_duration_must_be_positive() {
+            assertThatThrownBy(() -> new SeatReservationService(Set.of(A1), clock, Duration.ZERO, listener))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new SeatReservationService(Set.of(A1), clock, Duration.ofSeconds(-1), listener))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void null_arguments_are_rejected() {
+            assertThatThrownBy(() -> new SeatReservationService(null, clock, HOLD, listener))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("seats");
+            assertThatThrownBy(() -> service.hold(A1, null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -225,6 +736,167 @@ On the starter 20 of 25 tests pass: all 19 in `SeatReservationServiceTest` and t
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task18/SeatReservationService.java -->
+**[`SeatReservationService.java`](../solutions/src/main/java/io/github/chris013/practice/task18/SeatReservationService.java)**
+
+```java
+package io.github.chris013.practice.task18;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Holds and sells seats for one concert. Customers hold a seat while paying, then confirm it.
+ *
+ * <p>Thread-safe. Every seat has one entry in {@link #states}, and every state change for a seat happens inside
+ * {@link Map#compute}, which is atomic per key. Two customers racing for the same seat are serialised on that seat
+ * only; other seats are not blocked.
+ *
+ * <p>The {@link ReservationListener} is never called while a map operation is running. It is alien code and may call
+ * back into this service, so calling it under a lock or inside {@code compute} risks a deadlock.
+ *
+ * <p>Task 18: read {@code tasks/18-seat-reservation-races.md} first.
+ */
+public final class SeatReservationService {
+
+    private final Set<SeatId> seats;
+    private final Clock clock;
+    private final Duration holdDuration;
+    private final ReservationListener listener;
+
+    /** Absent key means the seat is free. */
+    private final Map<SeatId, SeatState> states = new ConcurrentHashMap<>();
+
+    /** Sale order. Append-only, so iterating it while other threads sell is safe. */
+    private final Queue<SeatId> soldInOrder = new ConcurrentLinkedQueue<>();
+
+    /** Kept next to the queue so {@link #soldCount()} does not walk the queue. Updated right after each sale. */
+    private final AtomicInteger soldCount = new AtomicInteger();
+
+    public SeatReservationService(
+            Set<SeatId> seats, Clock clock, Duration holdDuration, ReservationListener listener) {
+        this.seats = Set.copyOf(Objects.requireNonNull(seats, "seats"));
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.holdDuration = Objects.requireNonNull(holdDuration, "holdDuration");
+        this.listener = Objects.requireNonNull(listener, "listener");
+        if (holdDuration.isNegative() || holdDuration.isZero()) {
+            throw new IllegalArgumentException("holdDuration must be positive: " + holdDuration);
+        }
+    }
+
+    /**
+     * Returns the new hold, or empty when the seat is held by someone else (and the hold is still valid) or sold.
+     */
+    public Optional<Hold> hold(SeatId seat, CustomerId customer) {
+        requireKnown(seat);
+        Objects.requireNonNull(customer, "customer");
+        Instant now = clock.instant();
+        HeldSeat candidate = new HeldSeat(customer, now.plus(holdDuration));
+
+        // The lambda decides atomically. We compare identity afterwards to learn whether it chose our candidate.
+        SeatState result = states.compute(seat, (s, current) -> isAvailable(current, now) ? candidate : current);
+        if (result != candidate) {
+            return Optional.empty();
+        }
+        Hold hold = new Hold(seat, customer, candidate.expiresAt());
+        listener.seatHeld(hold);
+        return Optional.of(hold);
+    }
+
+    /** True when the customer holds the seat and the hold has not expired. The seat is then sold. */
+    public boolean confirm(SeatId seat, CustomerId customer) {
+        requireKnown(seat);
+        Objects.requireNonNull(customer, "customer");
+        Instant now = clock.instant();
+        SoldSeat candidate = new SoldSeat(customer);
+
+        SeatState result =
+                states.compute(seat, (s, current) -> isValidHoldOf(current, customer, now) ? candidate : current);
+        if (result != candidate) {
+            return false;
+        }
+        soldInOrder.add(seat);
+        soldCount.incrementAndGet();
+        listener.seatSold(seat, customer);
+        return true;
+    }
+
+    /** Removes the customer's own hold. Does nothing if the seat is free, sold, or held by someone else. */
+    public void release(SeatId seat, CustomerId customer) {
+        requireKnown(seat);
+        Objects.requireNonNull(customer, "customer");
+        states.computeIfPresent(seat, (s, current) -> isHeldBy(current, customer) ? null : current);
+    }
+
+    public int availableSeats() {
+        // One reading of the clock for the whole count, so every seat is judged at the same instant.
+        Instant now = clock.instant();
+        int available = 0;
+        for (SeatId seat : seats) {
+            if (isAvailable(states.get(seat), now)) {
+                available++;
+            }
+        }
+        return available;
+    }
+
+    public int soldCount() {
+        return soldCount.get();
+    }
+
+    /** A snapshot in sale order. Later sales do not change the returned list. */
+    public List<SeatId> soldSeats() {
+        return List.copyOf(soldInOrder);
+    }
+
+    private static boolean isAvailable(SeatState state, Instant now) {
+        return switch (state) {
+            case null -> true;
+            case HeldSeat held -> !held.isActiveAt(now);
+            case SoldSeat _ -> false;
+        };
+    }
+
+    /** Any hold of this customer, expired or not. Used by release: a customer may always drop their own hold. */
+    private static boolean isHeldBy(SeatState state, CustomerId customer) {
+        return state instanceof HeldSeat held && held.customer().equals(customer);
+    }
+
+    /** A hold of this customer that is still active at {@code now}. Used by confirm. */
+    private static boolean isValidHoldOf(SeatState state, CustomerId customer, Instant now) {
+        return state instanceof HeldSeat held && held.customer().equals(customer) && held.isActiveAt(now);
+    }
+
+    private void requireKnown(SeatId seat) {
+        Objects.requireNonNull(seat, "seat");
+        if (!seats.contains(seat)) {
+            throw new IllegalArgumentException("Unknown seat: " + seat.value());
+        }
+    }
+
+    /** The states a seat can be in. Immutable, so a value read from the map can be shared between threads. */
+    private sealed interface SeatState permits HeldSeat, SoldSeat {}
+
+    private record HeldSeat(CustomerId customer, Instant expiresAt) implements SeatState {
+
+        /** Held while {@code now < expiresAt}. At exactly {@code expiresAt} the hold is over. */
+        boolean isActiveAt(Instant now) {
+            return now.isBefore(expiresAt);
+        }
+    }
+
+    private record SoldSeat(CustomerId customer) implements SeatState {}
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

@@ -10,7 +10,8 @@ public final class CorruptCustomerDataException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
-    private final CustomerId customerId;
+    // Exceptions are serializable, the id is not: it is still in the message after deserialization.
+    private final transient CustomerId customerId;
     private final String field;
 
     public CorruptCustomerDataException(CustomerId customerId, String field, String problem, Throwable cause) {

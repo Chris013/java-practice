@@ -141,12 +141,293 @@ Run: `mvn test -Dtest='**/task07/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task07/ExchangeRateDecoratorsTest.java -->
+**[`ExchangeRateDecoratorsTest.java`](../src/test/java/io/github/chris013/practice/task07/ExchangeRateDecoratorsTest.java)**
+
+```java
+package io.github.chris013.practice.task07;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class ExchangeRateDecoratorsTest {
+
+    private static final CurrencyPair EUR_USD = CurrencyPair.of("EUR", "USD");
+    private static final CurrencyPair EUR_GBP = CurrencyPair.of("EUR", "GBP");
+    private static final Duration TEN_MINUTES = Duration.ofMinutes(10);
+
+    private final MutableClock clock = new MutableClock(Instant.parse("2026-03-01T09:00:00Z"));
+
+    @Nested
+    class Caching {
+
+        private final FakeExchangeRateProvider remote =
+                new FakeExchangeRateProvider("ECB").knows(EUR_USD, "1.0832").knows(EUR_GBP, "0.8571");
+        private final ExchangeRateProvider rates = new CachingExchangeRateProvider(remote, clock, TEN_MINUTES);
+
+        @Test
+        void asks_the_delegate_the_first_time() {
+            assertThat(rates.rateFor(EUR_USD).rate()).isEqualByComparingTo("1.0832");
+            assertThat(remote.calls()).isEqualTo(1);
+        }
+
+        @Test
+        void serves_repeated_requests_from_the_cache() {
+            rates.rateFor(EUR_USD);
+            clock.advanceBy(Duration.ofMinutes(9));
+
+            ExchangeRate rate = rates.rateFor(EUR_USD);
+
+            assertThat(rate.rate()).isEqualByComparingTo("1.0832");
+            assertThat(remote.calls()).isEqualTo(1);
+        }
+
+        @Test
+        void fetches_again_once_the_entry_has_expired() {
+            rates.rateFor(EUR_USD);
+            clock.advanceBy(TEN_MINUTES);
+
+            rates.rateFor(EUR_USD);
+
+            assertThat(remote.calls()).isEqualTo(2);
+        }
+
+        @Test
+        void caches_each_pair_separately() {
+            rates.rateFor(EUR_USD);
+            rates.rateFor(EUR_GBP);
+            rates.rateFor(EUR_USD);
+            rates.rateFor(EUR_GBP);
+
+            assertThat(remote.calls()).isEqualTo(2);
+        }
+
+        @Test
+        void does_not_cache_failures() {
+            remote.failsNextCalls(1);
+
+            assertThatThrownBy(() -> rates.rateFor(EUR_USD)).isInstanceOf(RateUnavailableException.class);
+            assertThat(rates.rateFor(EUR_USD).rate()).isEqualByComparingTo("1.0832");
+            assertThat(remote.calls()).isEqualTo(2);
+        }
+
+        @Test
+        void needs_a_positive_time_to_live() {
+            assertThatThrownBy(() -> new CachingExchangeRateProvider(remote, clock, Duration.ZERO))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new CachingExchangeRateProvider(remote, clock, Duration.ofSeconds(-1)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new CachingExchangeRateProvider(null, clock, TEN_MINUTES))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class Retrying {
+
+        private final FakeExchangeRateProvider remote = new FakeExchangeRateProvider("ECB").knows(EUR_USD, "1.0832");
+
+        @Test
+        void does_not_retry_when_the_first_attempt_succeeds() {
+            new RetryingExchangeRateProvider(remote, 3).rateFor(EUR_USD);
+
+            assertThat(remote.calls()).isEqualTo(1);
+        }
+
+        @Test
+        void retries_temporary_failures() {
+            remote.failsNextCalls(2);
+
+            ExchangeRate rate = new RetryingExchangeRateProvider(remote, 3).rateFor(EUR_USD);
+
+            assertThat(rate.rate()).isEqualByComparingTo("1.0832");
+            assertThat(remote.calls()).isEqualTo(3);
+        }
+
+        @Test
+        void gives_up_after_the_last_attempt_and_keeps_every_failure() {
+            remote.alwaysFails();
+            ExchangeRateProvider rates = new RetryingExchangeRateProvider(remote, 3);
+
+            assertThatThrownBy(() -> rates.rateFor(EUR_USD))
+                    .isInstanceOf(RateUnavailableException.class)
+                    .satisfies(failure -> assertThat(failure.getSuppressed()).hasSize(2));
+            assertThat(remote.calls()).isEqualTo(3);
+        }
+
+        @Test
+        void does_not_retry_errors_that_retrying_cannot_fix() {
+            ExchangeRateProvider rates = new RetryingExchangeRateProvider(remote, 3);
+
+            assertThatThrownBy(() -> rates.rateFor(EUR_GBP)).isInstanceOf(IllegalArgumentException.class);
+            assertThat(remote.calls()).isEqualTo(1);
+        }
+
+        @Test
+        void needs_at_least_one_attempt() {
+            assertThatThrownBy(() -> new RetryingExchangeRateProvider(remote, 0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Fallback {
+
+        private final FakeExchangeRateProvider primary = new FakeExchangeRateProvider("ECB").knows(EUR_USD, "1.0832");
+        private final FakeExchangeRateProvider secondary = new FakeExchangeRateProvider("Backup").knows(EUR_USD, "1.0829");
+        private final ExchangeRateProvider rates = new FallbackExchangeRateProvider(primary, secondary);
+
+        @Test
+        void prefers_the_primary_source() {
+            assertThat(rates.rateFor(EUR_USD).rate()).isEqualByComparingTo("1.0832");
+            assertThat(secondary.calls()).isZero();
+        }
+
+        @Test
+        void uses_the_secondary_source_when_the_primary_is_unavailable() {
+            primary.alwaysFails();
+
+            assertThat(rates.rateFor(EUR_USD).rate()).isEqualByComparingTo("1.0829");
+        }
+
+        @Test
+        void reports_both_failures_when_both_sources_are_unavailable() {
+            primary.alwaysFails();
+            secondary.alwaysFails();
+
+            assertThatThrownBy(() -> rates.rateFor(EUR_USD))
+                    .isInstanceOf(RateUnavailableException.class)
+                    .hasMessageContaining("Backup")
+                    .satisfies(failure -> assertThat(failure.getSuppressed())
+                            .singleElement()
+                            .satisfies(suppressed -> assertThat(suppressed).hasMessageContaining("ECB")));
+        }
+    }
+
+    @Test
+    void decorators_compose_into_a_resilient_cached_provider() {
+        FakeExchangeRateProvider ecb = new FakeExchangeRateProvider("ECB").knows(EUR_USD, "1.0832").failsNextCalls(1);
+        FakeExchangeRateProvider backup = new FakeExchangeRateProvider("Backup").alwaysFails();
+        ExchangeRateProvider rates = new CachingExchangeRateProvider(
+                new RetryingExchangeRateProvider(new FallbackExchangeRateProvider(ecb, backup), 2),
+                clock,
+                TEN_MINUTES);
+
+        BigDecimal first = rates.rateFor(EUR_USD).rate();
+        BigDecimal second = rates.rateFor(EUR_USD).rate();
+
+        assertThat(first).isEqualByComparingTo("1.0832");
+        assertThat(second).isEqualByComparingTo("1.0832");
+        assertThat(ecb.calls()).as("ECB: failed once, then succeeded on retry, then cached").isEqualTo(2);
+        assertThat(backup.calls()).as("backup was tried once during the failed first attempt").isEqualTo(1);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task07/FakeExchangeRateProvider.java -->
+**[`FakeExchangeRateProvider.java`](../src/test/java/io/github/chris013/practice/task07/FakeExchangeRateProvider.java)**
+
+```java
+package io.github.chris013.practice.task07;
+
+import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.Map;
+
+/** A hand-written fake: knows some rates, can be told to fail, and counts how often it was asked. */
+final class FakeExchangeRateProvider implements ExchangeRateProvider {
+
+    private final String name;
+    private final Map<CurrencyPair, BigDecimal> rates = new HashMap<>();
+    private int failuresToSimulate;
+    private int calls;
+
+    FakeExchangeRateProvider(String name) {
+        this.name = name;
+    }
+
+    FakeExchangeRateProvider knows(CurrencyPair pair, String rate) {
+        rates.put(pair, new BigDecimal(rate));
+        return this;
+    }
+
+    FakeExchangeRateProvider failsNextCalls(int times) {
+        failuresToSimulate = times;
+        return this;
+    }
+
+    FakeExchangeRateProvider alwaysFails() {
+        return failsNextCalls(Integer.MAX_VALUE);
+    }
+
+    int calls() {
+        return calls;
+    }
+
+    @Override
+    public ExchangeRate rateFor(CurrencyPair pair) {
+        calls++;
+        if (failuresToSimulate > 0) {
+            failuresToSimulate--;
+            throw new RateUnavailableException(pair, name + " is down");
+        }
+        BigDecimal rate = rates.get(pair);
+        if (rate == null) {
+            throw new IllegalArgumentException(name + " does not support " + pair);
+        }
+        return new ExchangeRate(pair, rate);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task07/MutableClock.java -->
+**[`MutableClock.java`](../src/test/java/io/github/chris013/practice/task07/MutableClock.java)**
+
+```java
+package io.github.chris013.practice.task07;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+
+/** A clock that only moves when the test says so. */
+final class MutableClock extends Clock {
+
+    private Instant now;
+
+    MutableClock(Instant start) {
+        this.now = start;
+    }
+
+    void advanceBy(Duration duration) {
+        now = now.plus(duration);
+    }
+
+    @Override
+    public Instant instant() {
+        return now;
+    }
+
+    @Override
+    public ZoneId getZone() {
+        return ZoneOffset.UTC;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+        throw new UnsupportedOperationException("Not needed in these tests");
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -192,12 +473,140 @@ Run: `mvn test -Dtest='**/task07/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task07/CachingExchangeRateProvider.java -->
+**[`CachingExchangeRateProvider.java`](../solutions/src/main/java/io/github/chris013/practice/task07/CachingExchangeRateProvider.java)**
+
+```java
+package io.github.chris013.practice.task07;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Remembers each rate for {@code timeToLive}, so we don't hit the remote API for every price we display.
+ * Failures are never cached: the next request tries again.
+ */
+public final class CachingExchangeRateProvider implements ExchangeRateProvider {
+
+    private final ExchangeRateProvider delegate;
+    private final Clock clock;
+    private final Duration timeToLive;
+    private final Map<CurrencyPair, CachedRate> cache = new ConcurrentHashMap<>();
+
+    public CachingExchangeRateProvider(ExchangeRateProvider delegate, Clock clock, Duration timeToLive) {
+        this.delegate = Objects.requireNonNull(delegate, "delegate");
+        this.clock = Objects.requireNonNull(clock, "clock");
+        this.timeToLive = Objects.requireNonNull(timeToLive, "timeToLive");
+        if (timeToLive.isZero() || timeToLive.isNegative()) {
+            throw new IllegalArgumentException("timeToLive must be positive, was " + timeToLive);
+        }
+    }
+
+    @Override
+    public ExchangeRate rateFor(CurrencyPair pair) {
+        Instant now = clock.instant();
+        CachedRate cached = cache.get(pair);
+        if (cached != null && cached.isFreshAt(now)) {
+            return cached.rate();
+        }
+        ExchangeRate fresh = delegate.rateFor(pair);
+        cache.put(pair, new CachedRate(fresh, now.plus(timeToLive)));
+        return fresh;
+    }
+
+    private record CachedRate(ExchangeRate rate, Instant expiresAt) {
+
+        boolean isFreshAt(Instant now) {
+            return now.isBefore(expiresAt);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task07/RetryingExchangeRateProvider.java -->
+**[`RetryingExchangeRateProvider.java`](../solutions/src/main/java/io/github/chris013/practice/task07/RetryingExchangeRateProvider.java)**
+
+```java
+package io.github.chris013.practice.task07;
+
+import java.util.Objects;
+
+/**
+ * Tries again when the delegate reports a temporary failure ({@link RateUnavailableException}). Other exceptions
+ * mean "retrying won't help" and are passed through immediately. If every attempt fails, the first failure is
+ * thrown with the later ones attached as suppressed exceptions, so nothing gets lost in the logs.
+ */
+public final class RetryingExchangeRateProvider implements ExchangeRateProvider {
+
+    private final ExchangeRateProvider delegate;
+    private final int maxAttempts;
+
+    public RetryingExchangeRateProvider(ExchangeRateProvider delegate, int maxAttempts) {
+        this.delegate = Objects.requireNonNull(delegate, "delegate");
+        if (maxAttempts < 1) {
+            throw new IllegalArgumentException("maxAttempts must be at least 1, was " + maxAttempts);
+        }
+        this.maxAttempts = maxAttempts;
+    }
+
+    @Override
+    public ExchangeRate rateFor(CurrencyPair pair) {
+        RateUnavailableException firstFailure = null;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return delegate.rateFor(pair);
+            } catch (RateUnavailableException failure) {
+                if (firstFailure == null) {
+                    firstFailure = failure;
+                } else {
+                    firstFailure.addSuppressed(failure);
+                }
+            }
+        }
+        throw firstFailure;
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task07/FallbackExchangeRateProvider.java -->
+**[`FallbackExchangeRateProvider.java`](../solutions/src/main/java/io/github/chris013/practice/task07/FallbackExchangeRateProvider.java)**
+
+```java
+package io.github.chris013.practice.task07;
+
+import java.util.Objects;
+
+/** Asks a secondary source when the primary one is temporarily unavailable. */
+public final class FallbackExchangeRateProvider implements ExchangeRateProvider {
+
+    private final ExchangeRateProvider primary;
+    private final ExchangeRateProvider secondary;
+
+    public FallbackExchangeRateProvider(ExchangeRateProvider primary, ExchangeRateProvider secondary) {
+        this.primary = Objects.requireNonNull(primary, "primary");
+        this.secondary = Objects.requireNonNull(secondary, "secondary");
+    }
+
+    @Override
+    public ExchangeRate rateFor(CurrencyPair pair) {
+        try {
+            return primary.rateFor(pair);
+        } catch (RateUnavailableException primaryFailure) {
+            try {
+                return secondary.rateFor(pair);
+            } catch (RateUnavailableException secondaryFailure) {
+                secondaryFailure.addSuppressed(primaryFailure);
+                throw secondaryFailure;
+            }
+        }
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

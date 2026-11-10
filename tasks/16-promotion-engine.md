@@ -224,18 +224,721 @@ Several of these tests check types that are already complete, so they pass on th
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task16/Lines.java -->
+**[`Lines.java`](../src/test/java/io/github/chris013/practice/task16/Lines.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import java.math.BigDecimal;
+import java.util.List;
+
+/** Test helper: builds basket lines in one line each, plus the grocery run used in the worked example. */
+final class Lines {
+
+    static final Sku PASTA = new Sku("PASTA-500G");
+    static final Sku SOURDOUGH = new Sku("BAKERY-SOURDOUGH");
+    static final Sku ROLLS = new Sku("BAKERY-ROLLS");
+    static final Sku JUICE = new Sku("DRINKS-ORANGE-1L");
+    static final Sku BUTTER = new Sku("DAIRY-BUTTER");
+    static final Sku SOAP = new Sku("HOUSE-SOAP");
+
+    private Lines() {
+    }
+
+    static BasketLine line(Sku sku, Category category, String unitPrice, int quantity) {
+        return new BasketLine(sku, sku.value(), category, new BigDecimal(unitPrice), quantity);
+    }
+
+    /** Six lines with a subtotal of 20.64. */
+    static List<BasketLine> groceryRun() {
+        return List.of(
+                line(PASTA, Category.PASTA, "1.49", 3),
+                line(SOURDOUGH, Category.BAKERY, "2.40", 1),
+                line(ROLLS, Category.BAKERY, "0.89", 1),
+                line(JUICE, Category.DRINKS, "1.99", 2),
+                line(BUTTER, Category.DAIRY, "3.20", 2),
+                line(SOAP, Category.HOUSEHOLD, "2.50", 1));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task16/BasketTest.java -->
+**[`BasketTest.java`](../src/test/java/io/github/chris013/practice/task16/BasketTest.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import static io.github.chris013.practice.task16.Lines.BUTTER;
+import static io.github.chris013.practice.task16.Lines.JUICE;
+import static io.github.chris013.practice.task16.Lines.PASTA;
+import static io.github.chris013.practice.task16.Lines.ROLLS;
+import static io.github.chris013.practice.task16.Lines.SOURDOUGH;
+import static io.github.chris013.practice.task16.Lines.groceryRun;
+import static io.github.chris013.practice.task16.Lines.line;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class BasketTest {
+
+    @Nested
+    class Totals {
+
+        @Test
+        void subtotal_adds_up_every_line() {
+            assertThat(Basket.of(groceryRun()).subtotal()).isEqualTo("20.64");
+        }
+
+        @Test
+        void total_equals_the_subtotal_when_nothing_is_discounted() {
+            assertThat(Basket.of(groceryRun()).total()).isEqualTo("20.64");
+        }
+
+        @Test
+        void an_empty_basket_has_a_subtotal_with_two_decimals() {
+            assertThat(Basket.of(List.of()).subtotal()).isEqualTo("0.00");
+            assertThat(Basket.of(List.of()).total()).isEqualTo("0.00");
+        }
+    }
+
+    @Nested
+    class Claims {
+
+        @Test
+        void unclaimed_lines_are_all_lines_at_the_start() {
+            assertThat(Basket.of(groceryRun()).unclaimedLines()).hasSize(6);
+        }
+
+        @Test
+        void after_adds_the_discount_to_the_total_and_claims_its_skus() {
+            Discount discount = new Discount("Earlier", new BigDecimal("1.49"), Set.of(PASTA));
+
+            Basket basket = Basket.of(groceryRun()).after(discount);
+
+            assertThat(basket.total()).isEqualTo("19.15");
+            assertThat(basket.unclaimedLines()).extracting(BasketLine::sku)
+                    .doesNotContain(PASTA)
+                    .hasSize(5);
+        }
+
+        @Test
+        void after_does_not_change_the_original_basket() {
+            Basket original = Basket.of(groceryRun());
+
+            original.after(new Discount("Earlier", new BigDecimal("1.49"), Set.of(PASTA)));
+
+            assertThat(original.total()).isEqualTo("20.64");
+            assertThat(original.unclaimedLines()).hasSize(6);
+        }
+
+        @Test
+        void later_changes_to_the_input_list_do_not_reach_the_basket() {
+            List<BasketLine> input = new ArrayList<>(groceryRun());
+            Basket basket = Basket.of(input);
+
+            input.clear();
+
+            assertThat(basket.lines()).hasSize(6);
+            assertThat(basket.subtotal()).isEqualTo("20.64");
+        }
+
+        @Test
+        void rejects_a_missing_list_of_lines() {
+            assertThatThrownBy(() -> Basket.of(null)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void after_rejects_a_missing_discount() {
+            assertThatThrownBy(() -> Basket.of(groceryRun()).after(null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class BasketLines {
+
+        @Test
+        void normalizes_the_unit_price_to_two_decimals() {
+            BasketLine bread = new BasketLine(SOURDOUGH, "Sourdough", Category.BAKERY, new BigDecimal("2.4"), 1);
+
+            assertThat(bread.unitPrice()).isEqualTo("2.40");
+        }
+
+        @Test
+        void multiplies_unit_price_by_quantity() {
+            assertThat(line(PASTA, Category.PASTA, "1.49", 3).total()).isEqualTo("4.47");
+        }
+
+        @ParameterizedTest
+        @CsvSource({"1.499, 1", "-0.01, 1", "2.40, 0"})
+        void rejects_a_price_with_three_decimals_a_negative_price_or_a_quantity_below_one(String price, int quantity) {
+            assertThatThrownBy(() -> line(ROLLS, Category.BAKERY, price, quantity))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Discounts {
+
+        @Test
+        void normalizes_the_amount_to_two_decimals() {
+            assertThat(new Discount("Five off", new BigDecimal("5"), Set.of()).amount()).isEqualTo("5.00");
+        }
+
+        @ParameterizedTest
+        @CsvSource({"0.00", "-1.00"})
+        void rejects_an_amount_that_is_not_positive(String amount) {
+            assertThatThrownBy(() -> new Discount("Nothing", new BigDecimal(amount), Set.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_an_amount_with_more_than_two_decimals() {
+            assertThatThrownBy(() -> new Discount("Too precise", new BigDecimal("0.333"), Set.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void lists_the_claimed_skus_it_was_created_with() {
+            Discount discount = new Discount("Juice", new BigDecimal("1.99"), Set.of(JUICE));
+
+            assertThat(discount.claimedSkus()).containsExactly(JUICE);
+            assertThat(discount.claimedSkus()).doesNotContain(BUTTER);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task16/PromotionsTest.java -->
+**[`PromotionsTest.java`](../src/test/java/io/github/chris013/practice/task16/PromotionsTest.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import static io.github.chris013.practice.task16.Lines.BUTTER;
+import static io.github.chris013.practice.task16.Lines.PASTA;
+import static io.github.chris013.practice.task16.Lines.ROLLS;
+import static io.github.chris013.practice.task16.Lines.SOURDOUGH;
+import static io.github.chris013.practice.task16.Lines.groceryRun;
+import static io.github.chris013.practice.task16.Lines.line;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class PromotionsTest {
+
+    @Nested
+    class PercentOffCategoryRules {
+
+        @Test
+        void takes_the_percentage_of_every_unclaimed_line_in_the_category() {
+            Optional<Discount> discount = new PercentOffCategory("10% off bakery", Category.BAKERY, 10)
+                    .evaluate(Basket.of(groceryRun()));
+
+            assertThat(discount).hasValueSatisfying(d -> {
+                assertThat(d.promotionName()).isEqualTo("10% off bakery");
+                assertThat(d.amount()).isEqualTo("0.33");
+                assertThat(d.claimedSkus()).containsExactlyInAnyOrder(SOURDOUGH, ROLLS);
+            });
+        }
+
+        // Rounded once, half up: 0.05 x 10 / 100 = 0.005 becomes 0.01, 2.45 x 50 / 100 = 1.225 becomes 1.23.
+        @ParameterizedTest
+        @CsvSource({"1.00, 33, 0.33", "0.05, 10, 0.01", "2.45, 50, 1.23"})
+        void rounds_the_discount_half_up_to_cents(String unitPrice, int percent, String expected) {
+            Basket basket = Basket.of(List.of(line(SOURDOUGH, Category.BAKERY, unitPrice, 1)));
+
+            Optional<Discount> discount = new PercentOffCategory("Off", Category.BAKERY, percent).evaluate(basket);
+
+            assertThat(discount).hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo(expected));
+        }
+
+        @Test
+        void ignores_lines_from_other_categories() {
+            Optional<Discount> discount = new PercentOffCategory("20% off dairy", Category.DAIRY, 20)
+                    .evaluate(Basket.of(List.of(line(PASTA, Category.PASTA, "1.49", 3))));
+
+            assertThat(discount).isEmpty();
+        }
+
+        @Test
+        void gives_nothing_when_the_discount_rounds_to_zero() {
+            // 0.04 / 100 * 10 = 0.004, which is 0.00 to the cent.
+            Basket basket = Basket.of(List.of(line(SOURDOUGH, Category.BAKERY, "0.04", 1)));
+
+            assertThat(new PercentOffCategory("Off", Category.BAKERY, 10).evaluate(basket)).isEmpty();
+        }
+
+        @Test
+        void skips_lines_whose_sku_is_already_claimed() {
+            Basket basket = Basket.of(groceryRun())
+                    .after(new Discount("Earlier", new BigDecimal("2.40"), Set.of(SOURDOUGH)));
+
+            Optional<Discount> discount = new PercentOffCategory("10% off bakery", Category.BAKERY, 10)
+                    .evaluate(basket);
+
+            // Only the rolls are left: 0.89 / 100 * 10 = 0.089, which is 0.09.
+            assertThat(discount).hasValueSatisfying(d -> {
+                assertThat(d.amount()).isEqualTo("0.09");
+                assertThat(d.claimedSkus()).containsExactly(ROLLS);
+            });
+        }
+
+        @Test
+        void rounds_once_on_the_category_total_not_per_line() {
+            // 0.10 x 10% = 0.01 once; per line it would be 0.005 -> 0.01 twice = 0.02.
+            Basket basket = Basket.of(List.of(
+                    line(SOURDOUGH, Category.BAKERY, "0.05", 1),
+                    line(ROLLS, Category.BAKERY, "0.05", 1)));
+
+            assertThat(new PercentOffCategory("Off", Category.BAKERY, 10).evaluate(basket))
+                    .hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("0.01"));
+        }
+
+        @Test
+        void rounds_once_on_the_line_total_not_per_unit() {
+            // 0.15 x 10% = 0.015 -> 0.02; per unit it would be 0.005 -> 0.01 three times = 0.03.
+            Basket basket = Basket.of(List.of(line(SOURDOUGH, Category.BAKERY, "0.05", 3)));
+
+            assertThat(new PercentOffCategory("Off", Category.BAKERY, 10).evaluate(basket))
+                    .hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("0.02"));
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {1, 100})
+        void accepts_the_percentage_limits(int percent) {
+            assertThatCode(() -> new PercentOffCategory("Off", Category.BAKERY, percent))
+                    .doesNotThrowAnyException();
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {0, 101})
+        void rejects_a_percentage_outside_one_to_one_hundred(int percent) {
+            assertThatThrownBy(() -> new PercentOffCategory("Off", Category.BAKERY, percent))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class BuyXPayYRules {
+
+        private final BuyXPayY threeForTwo = new BuyXPayY("3 for 2 on pasta", PASTA, 3, 2);
+
+        @Test
+        void gives_one_free_unit_for_a_full_group_and_claims_the_sku() {
+            assertThat(threeForTwo.evaluate(Basket.of(groceryRun()))).hasValueSatisfying(d -> {
+                assertThat(d.promotionName()).isEqualTo("3 for 2 on pasta");
+                assertThat(d.amount()).isEqualTo("1.49");
+                assertThat(d.claimedSkus()).containsExactly(PASTA);
+            });
+        }
+
+        @ParameterizedTest
+        @CsvSource({"3, 1.49", "5, 1.49", "6, 2.98", "7, 2.98"})
+        void gives_one_free_unit_per_full_group(int quantity, String expected) {
+            Basket basket = Basket.of(List.of(line(PASTA, Category.PASTA, "1.49", quantity)));
+
+            assertThat(threeForTwo.evaluate(basket)).hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo(expected));
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {1, 2})
+        void gives_nothing_until_a_full_group_is_in_the_basket(int quantity) {
+            Basket basket = Basket.of(List.of(line(PASTA, Category.PASTA, "1.49", quantity)));
+
+            assertThat(threeForTwo.evaluate(basket)).isEmpty();
+        }
+
+        @Test
+        void ignores_other_skus() {
+            assertThat(threeForTwo.evaluate(Basket.of(List.of(line(BUTTER, Category.DAIRY, "3.20", 6)))))
+                    .isEmpty();
+        }
+
+        @Test
+        void gives_nothing_when_the_sku_is_already_claimed() {
+            Basket basket = Basket.of(groceryRun())
+                    .after(new Discount("Earlier", new BigDecimal("0.45"), Set.of(PASTA)));
+
+            assertThat(threeForTwo.evaluate(basket)).isEmpty();
+        }
+
+        @Test
+        void gives_nothing_when_the_unit_price_is_zero() {
+            Basket basket = Basket.of(List.of(line(PASTA, Category.PASTA, "0.00", 3)));
+            assertThat(threeForTwo.evaluate(basket)).isEmpty();
+        }
+
+        @ParameterizedTest
+        @CsvSource({"2, 2", "3, 0", "2, 3"})
+        void rejects_a_deal_where_buy_is_not_more_than_pay_or_pay_is_below_one(int buy, int pay) {
+            assertThatThrownBy(() -> new BuyXPayY("Bad deal", PASTA, buy, pay))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class SpendAndSaveRules {
+
+        @Test
+        void takes_the_amount_off_when_the_total_reaches_the_threshold() {
+            // The threshold equals the total exactly: that counts as reaching it.
+            assertThat(new SpendAndSave("5 off from 20.64", new BigDecimal("20.64"), new BigDecimal("5.00"))
+                    .evaluate(Basket.of(groceryRun())))
+                    .hasValueSatisfying(d -> {
+                        assertThat(d.amount()).isEqualTo("5.00");
+                        assertThat(d.claimedSkus()).isEmpty();
+                    });
+        }
+
+        @Test
+        void does_nothing_just_below_the_threshold() {
+            assertThat(new SpendAndSave("5 off from 20.65", new BigDecimal("20.65"), new BigDecimal("5.00"))
+                    .evaluate(Basket.of(groceryRun()))).isEmpty();
+        }
+
+        @Test
+        void never_takes_more_than_the_total() {
+            assertThat(new SpendAndSave("50 off", BigDecimal.ZERO, new BigDecimal("50.00"))
+                    .evaluate(Basket.of(groceryRun())))
+                    .hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("20.64"));
+        }
+
+        @Test
+        void sees_the_total_after_earlier_discounts() {
+            Basket afterDiscounts = Basket.of(groceryRun())
+                    .after(new Discount("Earlier", new BigDecimal("3.81"), Set.of()));
+            SpendAndSave fiveOffFrom20 = new SpendAndSave("5 off from 20", new BigDecimal("20.00"), new BigDecimal("5.00"));
+
+            // 20.64 - 3.81 = 16.83, which is below 20.00.
+            assertThat(fiveOffFrom20.evaluate(afterDiscounts)).isEmpty();
+            assertThat(new SpendAndSave("5 off from 16.83", new BigDecimal("16.83"), new BigDecimal("5.00"))
+                    .evaluate(afterDiscounts)).hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("5.00"));
+        }
+
+        @Test
+        void gives_nothing_when_the_discount_would_be_zero() {
+            // The threshold is reached by an empty basket (0.00 >= 0.00), but min(5.00, 0.00) is 0.00: not a discount.
+            assertThat(new SpendAndSave("Free", BigDecimal.ZERO, new BigDecimal("5.00")).evaluate(Basket.of(List.of())))
+                    .isEmpty();
+        }
+
+        @ParameterizedTest
+        @CsvSource({"20.00, 0.00", "-1.00, 5.00", "20.00, 5.001", "20.001, 5.00"})
+        void rejects_a_negative_threshold_a_non_positive_amount_or_more_than_two_decimals(String threshold, String amountOff) {
+            assertThatThrownBy(() -> new SpendAndSave("Bad", new BigDecimal(threshold), new BigDecimal(amountOff)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task16/BestOfTest.java -->
+**[`BestOfTest.java`](../src/test/java/io/github/chris013/practice/task16/BestOfTest.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import static io.github.chris013.practice.task16.Lines.BUTTER;
+import static io.github.chris013.practice.task16.Lines.JUICE;
+import static io.github.chris013.practice.task16.Lines.PASTA;
+import static io.github.chris013.practice.task16.Lines.groceryRun;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.util.List;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class BestOfTest {
+
+    private final Basket basket = Basket.of(groceryRun());
+
+    private final Promotion bakeryTenPercent = new PercentOffCategory("10% off bakery", Category.BAKERY, 10);
+    private final Promotion drinksTwentyPercent = new PercentOffCategory("20% off drinks", Category.DRINKS, 20);
+    private final Promotion juiceTwoForOne = new BuyXPayY("Juice 2 for 1", JUICE, 2, 1);
+
+    @Nested
+    class Choosing {
+
+        @Test
+        void picks_the_option_with_the_highest_discount() {
+            // Juice 2 for 1 gives 1.99; 20% off drinks gives 0.80.
+            BestOf drinksDeal = new BestOf("Drinks deal", List.of(drinksTwentyPercent, juiceTwoForOne));
+
+            assertThat(drinksDeal.evaluate(basket)).hasValueSatisfying(d -> assertThat(d.amount()).isEqualTo("1.99"));
+        }
+
+        @Test
+        void keeps_the_name_of_the_winning_option_not_the_wrapper() {
+            BestOf drinksDeal = new BestOf("Drinks deal", List.of(drinksTwentyPercent, juiceTwoForOne));
+
+            assertThat(drinksDeal.evaluate(basket)).hasValueSatisfying(d -> {
+                assertThat(d.promotionName()).isEqualTo("Juice 2 for 1");
+                assertThat(d.claimedSkus()).containsExactly(JUICE);
+            });
+        }
+
+        @Test
+        void on_a_tie_the_option_listed_first_wins() {
+            Promotion first = new PercentOffCategory("First", Category.BAKERY, 10);
+            Promotion second = new PercentOffCategory("Second", Category.BAKERY, 10);
+
+            assertThat(new BestOf("Tie", List.of(first, second)).evaluate(basket))
+                    .hasValueSatisfying(d -> assertThat(d.promotionName()).isEqualTo("First"));
+            assertThat(new BestOf("Tie", List.of(second, first)).evaluate(basket))
+                    .hasValueSatisfying(d -> assertThat(d.promotionName()).isEqualTo("Second"));
+        }
+
+        @Test
+        void gives_nothing_when_no_option_applies() {
+            BestOf pastaOnly = new BestOf("Pasta only",
+                    List.of(new BuyXPayY("3 for 2 on pasta", PASTA, 3, 2)));
+
+            assertThat(pastaOnly.evaluate(Basket.of(List.of()))).isEmpty();
+        }
+
+        @Test
+        void skips_options_that_do_not_apply_and_picks_among_the_rest() {
+            // Two butter make no full group of 3, so that option is empty; only the bakery offer is left.
+            BestOf deal = new BestOf("Deal", List.of(new BuyXPayY("3 for 2 on butter", BUTTER, 3, 2), bakeryTenPercent));
+
+            assertThat(deal.evaluate(basket)).hasValueSatisfying(d -> {
+                assertThat(d.promotionName()).isEqualTo("10% off bakery");
+                assertThat(d.amount()).isEqualTo("0.33");
+            });
+        }
+    }
+
+    @Nested
+    class Composition {
+
+        @Test
+        void a_best_of_can_contain_another_best_of() {
+            BestOf innerDrinks = new BestOf("Drinks deal", List.of(drinksTwentyPercent, juiceTwoForOne));
+            // Pasta 3 for 2 gives 1.49 and the inner drinks deal gives 1.99, so the inner winner competes as one option.
+            BestOf outer = new BestOf("Best of all", List.of(
+                    new BuyXPayY("3 for 2 on pasta", PASTA, 3, 2), innerDrinks));
+
+            assertThat(outer.evaluate(basket)).hasValueSatisfying(d -> {
+                assertThat(d.promotionName()).isEqualTo("Juice 2 for 1");
+                assertThat(d.amount()).isEqualTo("1.99");
+            });
+        }
+
+        @Test
+        void an_inner_winner_can_lose_to_a_later_option_of_the_outer_best_of() {
+            BestOf innerDrinks = new BestOf("Drinks deal", List.of(drinksTwentyPercent, juiceTwoForOne));
+            BestOf outer = new BestOf("Best of all", List.of(innerDrinks, bakeryTenPercent,
+                    new PercentOffCategory("50% off pasta", Category.PASTA, 50)));
+
+            // 50% off pasta is 4.47 / 2 = 2.235, which rounds to 2.24 and beats the juice deal.
+            assertThat(outer.evaluate(basket)).hasValueSatisfying(d -> {
+                assertThat(d.promotionName()).isEqualTo("50% off pasta");
+                assertThat(d.amount()).isEqualTo("2.24");
+            });
+        }
+
+        @Test
+        void rejects_an_empty_list_of_options() {
+            assertThatThrownBy(() -> new BestOf("Nothing", List.of()))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task16/PromotionEngineTest.java -->
+**[`PromotionEngineTest.java`](../src/test/java/io/github/chris013/practice/task16/PromotionEngineTest.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import static io.github.chris013.practice.task16.Lines.PASTA;
+import static io.github.chris013.practice.task16.Lines.groceryRun;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+
+class PromotionEngineTest {
+
+    private final Promotion pastaThreeForTwo = new BuyXPayY("3 for 2 on pasta", PASTA, 3, 2);
+    private final Promotion bakeryTenPercent = new PercentOffCategory("10% off bakery", Category.BAKERY, 10);
+    private final Promotion drinksDeal = new BestOf("Drinks deal", List.of(
+            new PercentOffCategory("20% off drinks", Category.DRINKS, 20),
+            new BuyXPayY("Juice 2 for 1", Lines.JUICE, 2, 1)));
+    private final Promotion fiveOffFromSixteen =
+            new SpendAndSave("5 off from 16", new BigDecimal("16.00"), new BigDecimal("5.00"));
+    private final Promotion fiveOffFromTwenty =
+            new SpendAndSave("5 off from 20", new BigDecimal("20.00"), new BigDecimal("5.00"));
+
+    /** A promotion that always takes the same amount off, with no claims. Written as a class, not a lambda. */
+    private static Promotion fixedDiscount(String name, String amount) {
+        return new Promotion() {
+            @Override
+            public String name() {
+                return name;
+            }
+
+            @Override
+            public Optional<Discount> evaluate(Basket basket) {
+                return Optional.of(new Discount(name, new BigDecimal(amount), Set.of()));
+            }
+        };
+    }
+
+    @Nested
+    class WorkedExample {
+
+        // Subtotal 20.64. Line-level promotions first, then the basket-level one sees 16.83 and still applies.
+        private final PromotionEngine engine = new PromotionEngine(
+                List.of(pastaThreeForTwo, bakeryTenPercent, drinksDeal, fiveOffFromSixteen));
+
+        @Test
+        void gives_the_exact_subtotal_discounts_and_total() {
+            Receipt receipt = engine.price(groceryRun());
+
+            assertThat(receipt.subtotal()).isEqualTo("20.64");
+            assertThat(receipt.discounts()).extracting(Discount::promotionName)
+                    .containsExactly("3 for 2 on pasta", "10% off bakery", "Juice 2 for 1", "5 off from 16");
+            assertThat(receipt.discounts()).extracting(Discount::amount)
+                    .containsExactly(new BigDecimal("1.49"), new BigDecimal("0.33"), new BigDecimal("1.99"),
+                            new BigDecimal("5.00"));
+            // 20.64 - (1.49 + 0.33 + 1.99 + 5.00) = 20.64 - 8.81
+            assertThat(receipt.total()).isEqualTo("11.83");
+        }
+    }
+
+    @Nested
+    class Claims {
+
+        @Test
+        void a_claimed_sku_is_not_discounted_twice() {
+            PromotionEngine engine = new PromotionEngine(List.of(pastaThreeForTwo,
+                    new PercentOffCategory("50% off pasta", Category.PASTA, 50)));
+
+            Receipt receipt = engine.price(groceryRun());
+
+            assertThat(receipt.discounts()).extracting(Discount::promotionName).containsExactly("3 for 2 on pasta");
+            assertThat(receipt.total()).isEqualTo("19.15");
+        }
+
+        @Test
+        void an_earlier_line_promotion_hides_the_sku_from_a_later_one() {
+            PromotionEngine engine = new PromotionEngine(List.of(
+                    new PercentOffCategory("10% off pasta", Category.PASTA, 10), pastaThreeForTwo));
+
+            Receipt receipt = engine.price(groceryRun());
+
+            // 10% of 4.47 is 0.447, which rounds to 0.45; the 3-for-2 finds its SKU already claimed.
+            assertThat(receipt.discounts()).extracting(Discount::promotionName).containsExactly("10% off pasta");
+            assertThat(receipt.total()).isEqualTo("20.19");
+        }
+    }
+
+    @Nested
+    class Order {
+
+        @Test
+        void a_basket_level_promotion_placed_first_sees_the_full_subtotal() {
+            PromotionEngine engine = new PromotionEngine(List.of(fiveOffFromTwenty,
+                    pastaThreeForTwo, bakeryTenPercent, drinksDeal));
+
+            Receipt receipt = engine.price(groceryRun());
+
+            // 20.64 is at least 20.00, so the 5.00 applies first. The line promotions still apply afterwards.
+            assertThat(receipt.discounts()).extracting(Discount::promotionName).startsWith("5 off from 20");
+            assertThat(receipt.total()).isEqualTo("11.83");
+        }
+
+        @Test
+        void a_basket_level_promotion_placed_last_sees_only_the_discounted_total() {
+            PromotionEngine engine = new PromotionEngine(List.of(
+                    pastaThreeForTwo, bakeryTenPercent, drinksDeal, fiveOffFromTwenty));
+
+            Receipt receipt = engine.price(groceryRun());
+
+            // After 3.81 of line discounts the basket is 16.83, below 20.00, so the 5.00 does not apply.
+            assertThat(receipt.discounts()).hasSize(3);
+            assertThat(receipt.total()).isEqualTo("16.83");
+        }
+    }
+
+    @Nested
+    class EdgeCases {
+
+        @Test
+        void an_empty_basket_has_zero_subtotal_and_no_discounts() {
+            PromotionEngine engine = new PromotionEngine(List.of(pastaThreeForTwo, bakeryTenPercent,
+                    drinksDeal, fiveOffFromSixteen));
+
+            Receipt receipt = engine.price(List.of());
+
+            assertThat(receipt.subtotal()).isEqualTo("0.00");
+            assertThat(receipt.discounts()).isEmpty();
+            assertThat(receipt.total()).isEqualTo("0.00");
+        }
+
+        @Test
+        void no_promotions_means_the_total_is_the_subtotal() {
+            Receipt receipt = new PromotionEngine(List.of()).price(groceryRun());
+
+            assertThat(receipt.discounts()).isEmpty();
+            assertThat(receipt.total()).isEqualTo("20.64");
+        }
+
+        @Test
+        void the_total_never_goes_below_zero() {
+            PromotionEngine engine = new PromotionEngine(List.of(fixedDiscount("Too generous", "100.00")));
+
+            Receipt receipt = engine.price(groceryRun());
+
+            assertThat(receipt.subtotal()).isEqualTo("20.64");
+            assertThat(receipt.discounts()).hasSize(1);
+            assertThat(receipt.total()).isEqualTo("0.00");
+        }
+
+        @Test
+        void rejects_a_missing_list_of_promotions() {
+            assertThatThrownBy(() -> new PromotionEngine(null)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void rejects_a_missing_list_of_lines() {
+            assertThatThrownBy(() -> new PromotionEngine(List.of()).price(null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -283,21 +986,347 @@ Several of these tests check types that are already complete, so they pass on th
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task16/Basket.java -->
+**[`Basket.java`](../solutions/src/main/java/io/github/chris013/practice/task16/Basket.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import java.math.BigDecimal;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * The state that flows through the {@link PromotionEngine}: the lines, the SKUs already used up by discounts,
+ * and the discount so far.
+ *
+ * <p>Immutable. {@link #after(Discount)} returns a new basket and never changes this one. That is what makes the
+ * pipeline easy to reason about: a promotion cannot change the basket under the feet of the promotions after it.
+ */
+public record Basket(List<BasketLine> lines, Set<Sku> claimedSkus, BigDecimal discountSoFar) {
+
+    public Basket {
+        lines = List.copyOf(Objects.requireNonNull(lines, "lines"));
+        claimedSkus = Set.copyOf(Objects.requireNonNull(claimedSkus, "claimedSkus"));
+        discountSoFar = Cents.of(discountSoFar, "discountSoFar");
+        if (discountSoFar.signum() < 0) {
+            throw new IllegalArgumentException("discountSoFar cannot be negative, was " + discountSoFar);
+        }
+    }
+
+    /** A basket with no discounts and nothing claimed. */
+    public static Basket of(List<BasketLine> lines) {
+        return new Basket(lines, Set.of(), Cents.ZERO);
+    }
+
+    /** The price of all lines before any discount. An empty basket has a subtotal of 0.00. */
+    public BigDecimal subtotal() {
+        return lines.stream().map(BasketLine::total).reduce(Cents.ZERO, BigDecimal::add);
+    }
+
+    /** The subtotal minus the discounts applied so far. */
+    public BigDecimal total() {
+        return subtotal().subtract(discountSoFar);
+    }
+
+    /** The lines whose SKU is not claimed yet. Line-level promotions only look at these. */
+    public List<BasketLine> unclaimedLines() {
+        return lines.stream().filter(line -> !claimedSkus.contains(line.sku())).toList();
+    }
+
+    /** A new basket with the discount's amount added and its SKUs claimed. */
+    public Basket after(Discount discount) {
+        Objects.requireNonNull(discount, "discount");
+        Set<Sku> claimed = Stream.concat(claimedSkus.stream(), discount.claimedSkus().stream())
+                .collect(Collectors.toUnmodifiableSet());
+        return new Basket(lines, claimed, discountSoFar.add(discount.amount()));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task16/PercentOffCategory.java -->
+**[`PercentOffCategory.java`](../solutions/src/main/java/io/github/chris013/practice/task16/PercentOffCategory.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Takes a percentage off every unclaimed line in one category, for example "10% off bakery".
+ *
+ * <p>The amount is computed once, on the sum of the category, and rounded once. Rounding each line separately
+ * can end up a cent away from what the customer would expect for the whole category.
+ */
+public final class PercentOffCategory implements Promotion {
+
+    private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
+
+    private final String name;
+    private final Category category;
+    private final int percent;
+
+    public PercentOffCategory(String name, Category category, int percent) {
+        this.name = Objects.requireNonNull(name, "name");
+        this.category = Objects.requireNonNull(category, "category");
+        if (percent < 1 || percent > 100) {
+            throw new IllegalArgumentException("percent must be from 1 to 100, was " + percent);
+        }
+        this.percent = percent;
+    }
+
+    @Override
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public Optional<Discount> evaluate(Basket basket) {
+        List<BasketLine> matching = basket.unclaimedLines().stream()
+                .filter(line -> line.category() == category)
+                .toList();
+        if (matching.isEmpty()) {
+            return Optional.empty();
+        }
+        BigDecimal eligible = matching.stream().map(BasketLine::total).reduce(Cents.ZERO, BigDecimal::add);
+        BigDecimal amount = eligible.multiply(BigDecimal.valueOf(percent)).divide(HUNDRED, 2, RoundingMode.HALF_UP);
+        // A discount of zero is not a discount: Discount refuses it, and nothing is claimed.
+        if (amount.signum() == 0) {
+            return Optional.empty();
+        }
+        Set<Sku> claimed = matching.stream().map(BasketLine::sku).collect(Collectors.toUnmodifiableSet());
+        return Optional.of(new Discount(name, amount, claimed));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task16/BuyXPayY.java -->
+**[`BuyXPayY.java`](../solutions/src/main/java/io/github/chris013/practice/task16/BuyXPayY.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import java.math.BigDecimal;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * "Buy X, pay for Y" on one product, for example "3 for 2 on pasta".
+ *
+ * <p>Only full groups count: 5 pasta with "3 for 2" give one free pasta, not two. The free units are priced at the
+ * line's unit price, so the customer never gets a discount larger than the item.
+ */
+public final class BuyXPayY implements Promotion {
+
+    private final String name;
+    private final Sku sku;
+    private final int buy;
+    private final int pay;
+
+    public BuyXPayY(String name, Sku sku, int buy, int pay) {
+        this.name = Objects.requireNonNull(name, "name");
+        this.sku = Objects.requireNonNull(sku, "sku");
+        if (pay < 1) {
+            throw new IllegalArgumentException("pay must be at least 1, was " + pay);
+        }
+        if (buy <= pay) {
+            throw new IllegalArgumentException("buy must be more than pay, was buy %d pay %d".formatted(buy, pay));
+        }
+        this.buy = buy;
+        this.pay = pay;
+    }
+
+    @Override
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public Optional<Discount> evaluate(Basket basket) {
+        Optional<BasketLine> line = basket.unclaimedLines().stream()
+                .filter(candidate -> candidate.sku().equals(sku))
+                .findFirst();
+        if (line.isEmpty()) {
+            return Optional.empty();
+        }
+        int freeUnits = (line.get().quantity() / buy) * (buy - pay);
+        if (freeUnits == 0) {
+            return Optional.empty();
+        }
+        BigDecimal amount = line.get().unitPrice().multiply(BigDecimal.valueOf(freeUnits));
+        if (amount.signum() == 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new Discount(name, amount, Set.of(sku)));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task16/SpendAndSave.java -->
+**[`SpendAndSave.java`](../solutions/src/main/java/io/github/chris013/practice/task16/SpendAndSave.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import java.math.BigDecimal;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+
+/**
+ * A basket-level promotion: "5 EUR off from 50 EUR". It looks at the total as it is when the promotion is
+ * evaluated, which includes the discounts of earlier promotions. It claims no SKUs, because it does not use up
+ * any particular product.
+ */
+public final class SpendAndSave implements Promotion {
+
+    private final String name;
+    private final BigDecimal threshold;
+    private final BigDecimal amountOff;
+
+    public SpendAndSave(String name, BigDecimal threshold, BigDecimal amountOff) {
+        this.name = Objects.requireNonNull(name, "name");
+        this.threshold = Cents.of(threshold, "threshold");
+        if (this.threshold.signum() < 0) {
+            throw new IllegalArgumentException("threshold cannot be negative, was " + threshold);
+        }
+        this.amountOff = Cents.of(amountOff, "amountOff");
+        if (this.amountOff.signum() <= 0) {
+            throw new IllegalArgumentException("amountOff must be positive, was " + amountOff);
+        }
+    }
+
+    @Override
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public Optional<Discount> evaluate(Basket basket) {
+        BigDecimal total = basket.total();
+        if (total.compareTo(threshold) < 0) {
+            return Optional.empty();
+        }
+        // Never take more than the customer still has to pay.
+        BigDecimal amount = amountOff.min(total);
+        if (amount.signum() <= 0) {
+            return Optional.empty();
+        }
+        return Optional.of(new Discount(name, amount, Set.of()));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task16/BestOf.java -->
+**[`BestOf.java`](../solutions/src/main/java/io/github/chris013/practice/task16/BestOf.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * A composite promotion: "the better of two offers". Every option is evaluated against the same basket and only
+ * the best discount is used. A {@code BestOf} can contain another {@code BestOf}, and then the inner winner
+ * competes as one option.
+ *
+ * <p>The winning {@link Discount} is returned unchanged, so the receipt names the promotion that was actually
+ * applied, not the wrapper. For nested composites that is the innermost winner.
+ */
+public final class BestOf implements Promotion {
+
+    private final String name;
+    private final List<Promotion> options;
+
+    public BestOf(String name, List<Promotion> options) {
+        this.name = Objects.requireNonNull(name, "name");
+        this.options = List.copyOf(Objects.requireNonNull(options, "options"));
+        if (this.options.isEmpty()) {
+            throw new IllegalArgumentException("A BestOf needs at least one option");
+        }
+    }
+
+    @Override
+    public String name() {
+        return name;
+    }
+
+    @Override
+    public Optional<Discount> evaluate(Basket basket) {
+        Discount best = null;
+        for (Promotion option : options) {
+            Optional<Discount> candidate = option.evaluate(basket);
+            // Strictly greater: on a tie the option listed first keeps the win.
+            if (candidate.isPresent() && (best == null || candidate.get().amount().compareTo(best.amount()) > 0)) {
+                best = candidate.get();
+            }
+        }
+        return Optional.ofNullable(best);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task16/PromotionEngine.java -->
+**[`PromotionEngine.java`](../solutions/src/main/java/io/github/chris013/practice/task16/PromotionEngine.java)**
+
+```java
+package io.github.chris013.practice.task16;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * Prices a basket by applying promotions one after another, in the order they were given. Each promotion sees the
+ * basket as the earlier ones left it. Put line-level promotions first: a basket-level one such as "5 off from 50"
+ * then sees the total after those discounts.
+ *
+ * <p>The engine knows nothing about the kinds of promotion. It only calls {@link Promotion#evaluate}. That is why
+ * adding a new promotion never touches this class.
+ */
+public final class PromotionEngine {
+
+    private final List<Promotion> promotions;
+
+    public PromotionEngine(List<Promotion> promotionsInPriorityOrder) {
+        this.promotions = List.copyOf(Objects.requireNonNull(promotionsInPriorityOrder, "promotionsInPriorityOrder"));
+    }
+
+    /**
+     * Applies every promotion that applies, in order. The total is the subtotal minus all discounts, and never
+     * below 0.00.
+     */
+    public Receipt price(List<BasketLine> lines) {
+        Basket basket = Basket.of(lines);
+        List<Discount> applied = new ArrayList<>();
+        for (Promotion promotion : promotions) {
+            Optional<Discount> discount = promotion.evaluate(basket);
+            if (discount.isPresent()) {
+                applied.add(discount.get());
+                basket = basket.after(discount.get());
+            }
+        }
+        return new Receipt(basket.subtotal(), applied, basket.total().max(Cents.ZERO));
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

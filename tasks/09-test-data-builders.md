@@ -107,6 +107,65 @@ The starter has one test class, [`LegacyPremiumCalculatorTest`](../src/test/java
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task09/LegacyPremiumCalculatorTest.java -->
+**[`LegacyPremiumCalculatorTest.java`](../src/test/java/io/github/chris013/practice/task09/LegacyPremiumCalculatorTest.java)**
+
+```java
+package io.github.chris013.practice.task09;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import org.junit.jupiter.api.Test;
+
+// Written in 2019 by someone who has since left. Nobody knows what test1 was meant to cover.
+class LegacyPremiumCalculatorTest {
+
+    PremiumCalculator calc = new PremiumCalculator();
+
+    @Test
+    void test1() {
+        LocalDate start = LocalDate.of(2026, 3, 1);
+        Policyholder p = new Policyholder(LocalDate.of(1980, 1, 1), LocalDate.of(2000, 1, 1), 0, "10115");
+        Vehicle v = new Vehicle("VW Golf", 110, 25000, 2022);
+        assertEquals(new BigDecimal("300.00"), calc.annualPremium(p, v, Coverage.LIABILITY, start));
+        assertEquals(new BigDecimal("420.00"), calc.annualPremium(p, v, Coverage.PARTIAL, start));
+        assertEquals(new BigDecimal("600.00"), calc.annualPremium(p, v, Coverage.FULL, start));
+
+        // young driver, one claim, two years licensed
+        Policyholder p2 = new Policyholder(LocalDate.of(2005, 1, 1), LocalDate.of(2024, 1, 1), 1, "10115");
+        assertEquals(new BigDecimal("702.00"), calc.annualPremium(p2, v, Coverage.LIABILITY, start));
+    }
+
+    @Test
+    void testPremium() {
+        LocalDate start = LocalDate.of(2026, 3, 1);
+        Policyholder p = new Policyholder(LocalDate.of(1980, 1, 1), LocalDate.of(2000, 1, 1), 0, "10115");
+        Vehicle fast = new Vehicle("BMW M3", 300, 60000, 2020);
+        assertEquals(new BigDecimal("420.00"), calc.annualPremium(p, fast, Coverage.LIABILITY, start));
+        assertEquals(new BigDecimal("840.00"), calc.annualPremium(p, fast, Coverage.FULL, start));
+
+        // senior driver
+        Policyholder old = new Policyholder(LocalDate.of(1950, 1, 1), LocalDate.of(1970, 1, 1), 0, "80331");
+        Vehicle golf = new Vehicle("VW Golf", 110, 25000, 2022);
+        assertEquals(new BigDecimal("360.00"), calc.annualPremium(old, golf, Coverage.LIABILITY, start));
+    }
+
+    @Test
+    void testUninsurable() {
+        LocalDate start = LocalDate.of(2026, 3, 1);
+        Vehicle v = new Vehicle("VW Golf", 110, 25000, 2022);
+        Policyholder kid = new Policyholder(LocalDate.of(2010, 1, 1), LocalDate.of(2020, 1, 1), 0, "10115");
+        assertThrows(UninsurableException.class, () -> calc.annualPremium(kid, v, Coverage.LIABILITY, start));
+        Policyholder crashy = new Policyholder(LocalDate.of(1980, 1, 1), LocalDate.of(2000, 1, 1), 3, "10115");
+        assertThrows(UninsurableException.class, () -> calc.annualPremium(crashy, v, Coverage.LIABILITY, start));
+        Vehicle expensive = new Vehicle("Porsche", 150, 120000, 2024);
+        Policyholder p = new Policyholder(LocalDate.of(1980, 1, 1), LocalDate.of(2000, 1, 1), 0, "10115");
+        assertThrows(UninsurableException.class, () -> calc.annualPremium(p, expensive, Coverage.FULL, start));
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -154,18 +213,454 @@ The starter has one test class, [`LegacyPremiumCalculatorTest`](../src/test/java
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task09/PremiumCalculator.java -->
+**[`PremiumCalculator.java`](../solutions/src/main/java/io/github/chris013/practice/task09/PremiumCalculator.java)**
+
+```java
+package io.github.chris013.practice.task09;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.Period;
+import java.util.Objects;
+
+/**
+ * Calculates the annual car insurance premium.
+ *
+ * <p>Start with the base premium of the coverage, multiply in every risk factor, and round
+ * to cents once at the very end.
+ */
+public final class PremiumCalculator {
+
+    public BigDecimal annualPremium(Policyholder holder, Vehicle vehicle, Coverage coverage, LocalDate policyStart) {
+        Objects.requireNonNull(holder, "holder");
+        Objects.requireNonNull(vehicle, "vehicle");
+        Objects.requireNonNull(coverage, "coverage");
+        Objects.requireNonNull(policyStart, "policyStart");
+
+        BigDecimal premium = coverage.basePremium();
+
+        // age on the day the policy starts
+        int age = Period.between(holder.birthDate(), policyStart).getYears();
+        if (age < 18) {
+            throw new UninsurableException("Drivers must be 18 or older, this one is " + age);
+        }
+        // young drivers
+        if (age <= 24) {
+            premium = premium.multiply(new BigDecimal("1.50"));
+        } else if (age >= 70) {
+            // senior drivers
+            premium = premium.multiply(new BigDecimal("1.20"));
+        }
+
+        // inexperienced drivers: fewer than three full years with a licence
+        int experience = Period.between(holder.licensedSince(), policyStart).getYears();
+        if (experience < 3) {
+            premium = premium.multiply(new BigDecimal("1.30"));
+        }
+
+        // claims in the last five years
+        int claims = holder.claimsInLastFiveYears();
+        if (claims >= 3) {
+            throw new UninsurableException("Three or more claims in five years");
+        } else if (claims == 2) {
+            premium = premium.multiply(new BigDecimal("1.50"));
+        } else if (claims == 1) {
+            premium = premium.multiply(new BigDecimal("1.20"));
+        }
+
+        // power
+        if (vehicle.horsepower() > 200) {
+            premium = premium.multiply(new BigDecimal("1.40"));
+        } else if (vehicle.horsepower() > 150) {
+            premium = premium.multiply(new BigDecimal("1.20"));
+        }
+
+        if (coverage == Coverage.FULL && vehicle.valueEuros() > 100_000) {
+            throw new UninsurableException("Full cover is not offered for cars worth more than 100000 EUR");
+        }
+
+        return premium.setScale(2, RoundingMode.HALF_UP);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task09/PolicyholderBuilder.java -->
+**[`PolicyholderBuilder.java`](../solutions/src/test/java/io/github/chris013/practice/task09/PolicyholderBuilder.java)**
+
+```java
+package io.github.chris013.practice.task09;
+
+import static io.github.chris013.practice.task09.TestDates.POLICY_START;
+
+import java.time.LocalDate;
+
+/**
+ * Builds a {@link Policyholder} for tests.
+ *
+ * <p>The defaults describe a boring driver: 40 years old, licensed for 20 years, no claims. None
+ * of the pricing rules applies to this driver, so a test that does not mention a property gets
+ * the base premium. A test should only mention what it is about.
+ *
+ * <p>Ages are relative to {@link TestDates#POLICY_START}, so {@code aged(30)} is a 30-year-old on
+ * the day the policy starts.
+ */
+final class PolicyholderBuilder {
+
+    private LocalDate birthDate = POLICY_START.minusYears(40);
+    private LocalDate licensedSince = POLICY_START.minusYears(20);
+    private int claimsInLastFiveYears = 0;
+    private String postcode = "10115";
+
+    private PolicyholderBuilder() {
+    }
+
+    static PolicyholderBuilder aPolicyholder() {
+        return new PolicyholderBuilder();
+    }
+
+    /** The driver is this many years old on the policy start. */
+    PolicyholderBuilder aged(int years) {
+        return bornOn(POLICY_START.minusYears(years));
+    }
+
+    PolicyholderBuilder bornOn(LocalDate birthDate) {
+        this.birthDate = birthDate;
+        return this;
+    }
+
+    /** The driver has held a licence for this many full years on the policy start. */
+    PolicyholderBuilder licensedForYears(int years) {
+        return licensedOn(POLICY_START.minusYears(years));
+    }
+
+    PolicyholderBuilder licensedOn(LocalDate licensedSince) {
+        this.licensedSince = licensedSince;
+        return this;
+    }
+
+    PolicyholderBuilder withClaims(int claimsInLastFiveYears) {
+        this.claimsInLastFiveYears = claimsInLastFiveYears;
+        return this;
+    }
+
+    Policyholder build() {
+        return new Policyholder(birthDate, licensedSince, claimsInLastFiveYears, postcode);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task09/VehicleBuilder.java -->
+**[`VehicleBuilder.java`](../solutions/src/test/java/io/github/chris013/practice/task09/VehicleBuilder.java)**
+
+```java
+package io.github.chris013.practice.task09;
+
+/**
+ * Builds a {@link Vehicle} for tests.
+ *
+ * <p>The defaults are a mid-range family car: 110 hp, worth 25,000 EUR. It triggers no
+ * horsepower rule and no value rule.
+ */
+final class VehicleBuilder {
+
+    private String model = "VW Golf";
+    private int horsepower = 110;
+    private int valueEuros = 25_000;
+    private int yearBuilt = 2022;
+
+    private VehicleBuilder() {
+    }
+
+    static VehicleBuilder aVehicle() {
+        return new VehicleBuilder();
+    }
+
+    VehicleBuilder withHorsepower(int horsepower) {
+        this.horsepower = horsepower;
+        return this;
+    }
+
+    VehicleBuilder worth(int valueEuros) {
+        this.valueEuros = valueEuros;
+        return this;
+    }
+
+    Vehicle build() {
+        return new Vehicle(model, horsepower, valueEuros, yearBuilt);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task09/TestDates.java -->
+**[`TestDates.java`](../solutions/src/test/java/io/github/chris013/practice/task09/TestDates.java)**
+
+```java
+package io.github.chris013.practice.task09;
+
+import java.time.LocalDate;
+
+/** Fixed dates shared by all tests. Never use {@code LocalDate.now()} in a test. */
+final class TestDates {
+
+    /**
+     * The policy start used by every test unless it says otherwise. The builder defaults are
+     * computed from this date, so a test can say "aged 40" without a calendar date.
+     */
+    static final LocalDate POLICY_START = LocalDate.of(2026, 3, 1);
+
+    private TestDates() {
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task09/PremiumCalculatorTest.java -->
+**[`PremiumCalculatorTest.java`](../solutions/src/test/java/io/github/chris013/practice/task09/PremiumCalculatorTest.java)**
+
+```java
+package io.github.chris013.practice.task09;
+
+import static io.github.chris013.practice.task09.PolicyholderBuilder.aPolicyholder;
+import static io.github.chris013.practice.task09.TestDates.POLICY_START;
+import static io.github.chris013.practice.task09.VehicleBuilder.aVehicle;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/**
+ * Specifications for {@link PremiumCalculator}. Every premium is the base premium of
+ * {@link Coverage#LIABILITY} (300.00) times the factors of the rule under test.
+ */
+class PremiumCalculatorTest {
+
+    private final PremiumCalculator calculator = new PremiumCalculator();
+
+    private BigDecimal quote(Policyholder holder, Vehicle vehicle, Coverage coverage) {
+        return calculator.annualPremium(holder, vehicle, coverage, POLICY_START);
+    }
+
+    private BigDecimal liabilityQuote(Policyholder holder) {
+        return quote(holder, aVehicle().build(), Coverage.LIABILITY);
+    }
+
+    @Nested
+    class BasePremium {
+
+        @ParameterizedTest
+        @CsvSource({"LIABILITY, 300.00", "PARTIAL, 420.00", "FULL, 600.00"})
+        void depends_only_on_the_coverage_for_a_neutral_driver(Coverage coverage, String expected) {
+            BigDecimal premium = quote(aPolicyholder().build(), aVehicle().build(), coverage);
+
+            assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+
+        @Test
+        void the_premium_has_exactly_two_decimal_places() {
+            BigDecimal premium = liabilityQuote(aPolicyholder().build());
+
+            assertThat(premium.scale()).isEqualTo(2);
+        }
+    }
+
+    @Nested
+    class Age {
+
+        @Test
+        void drivers_under_18_are_uninsurable() {
+            // 17 today, and 17 until the birthday tomorrow
+            Policyholder holder = aPolicyholder().bornOn(POLICY_START.minusYears(18).plusDays(1)).build();
+
+            assertThatThrownBy(() -> liabilityQuote(holder))
+                    .isInstanceOf(UninsurableException.class);
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {16, 17})
+        void drivers_aged_16_or_17_are_uninsurable(int age) {
+            assertThatThrownBy(() -> liabilityQuote(aPolicyholder().aged(age).licensedForYears(0).build()))
+                    .isInstanceOf(UninsurableException.class);
+        }
+
+        @ParameterizedTest(name = "aged {0} pays {1}")
+        @CsvSource({
+            "18, 450.00", // insurable from the 18th birthday: young-driver factor
+            "24, 450.00", // last year with the young-driver factor
+            "25, 300.00", // the young-driver factor is gone on the 25th birthday
+            "69, 300.00", // last year before the senior factor
+            "70, 360.00"  // senior factor from the 70th birthday
+        })
+        void the_age_factor_follows_the_age_bands(int age, String expected) {
+            BigDecimal premium = liabilityQuote(aPolicyholder().aged(age).build());
+
+            assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+
+        @Test
+        void the_young_driver_factor_still_applies_the_day_before_the_25th_birthday() {
+            // Born the day after 25 years before the policy start: 24 today, 25 tomorrow.
+            Policyholder holder = aPolicyholder().bornOn(POLICY_START.minusYears(25).plusDays(1)).build();
+
+            assertThat(liabilityQuote(holder)).isEqualTo(new BigDecimal("450.00")); // 300.00 x 1.50
+        }
+
+        @Test
+        void the_senior_factor_does_not_apply_the_day_before_the_70th_birthday() {
+            // Born the day after 70 years before the policy start: 69 today, 70 tomorrow.
+            Policyholder holder = aPolicyholder().bornOn(POLICY_START.minusYears(70).plusDays(1)).build();
+
+            assertThat(liabilityQuote(holder)).isEqualTo(new BigDecimal("300.00"));
+        }
+
+        @Test
+        void young_driver_factor_applies_until_the_25th_birthday_not_until_new_year() {
+            // Born in September: 24 on 1 March 2026, 25 only from September 2026.
+            BigDecimal premium = liabilityQuote(aPolicyholder().bornOn(LocalDate.of(2001, 9, 15)).build());
+
+            assertThat(premium).isEqualTo(new BigDecimal("450.00")); // 300.00 x 1.50
+        }
+
+        @Test
+        void the_age_is_measured_on_the_policy_start_date() {
+            LocalDate birthDate = LocalDate.of(2001, 3, 1);
+
+            BigDecimal beforeBirthday = calculator.annualPremium(
+                    aPolicyholder().bornOn(birthDate).build(), aVehicle().build(), Coverage.LIABILITY,
+                    LocalDate.of(2026, 2, 28));
+            BigDecimal onBirthday = calculator.annualPremium(
+                    aPolicyholder().bornOn(birthDate).build(), aVehicle().build(), Coverage.LIABILITY,
+                    LocalDate.of(2026, 3, 1));
+
+            assertThat(beforeBirthday).isEqualTo(new BigDecimal("450.00")); // still 24
+            assertThat(onBirthday).isEqualTo(new BigDecimal("300.00"));     // 25
+        }
+    }
+
+    @Nested
+    class DrivingExperience {
+
+        @ParameterizedTest(name = "licensed for {0} years pays {1}")
+        @CsvSource({"2, 390.00", "3, 300.00"})
+        void fewer_than_three_full_years_costs_thirty_percent_more(int years, String expected) {
+            BigDecimal premium = liabilityQuote(aPolicyholder().licensedForYears(years).build());
+
+            assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+
+        @ParameterizedTest(name = "licensed since {0} pays {1}")
+        @CsvSource({
+            "2023-03-02, 390.00", // 2 years and 11 months: still only 2 full years
+            "2023-03-01, 300.00"  // exactly 3 years
+        })
+        void only_complete_years_count(String licensedSince, String expected) {
+            BigDecimal premium = liabilityQuote(aPolicyholder().licensedOn(LocalDate.parse(licensedSince)).build());
+
+            assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+    }
+
+    @Nested
+    class Claims {
+
+        @ParameterizedTest(name = "{0} claims pays {1}")
+        @CsvSource({"0, 300.00", "1, 360.00", "2, 450.00"})
+        void each_claim_adds_a_surcharge_up_to_two_claims(int claims, String expected) {
+            BigDecimal premium = liabilityQuote(aPolicyholder().withClaims(claims).build());
+
+            assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {3, 4, 10})
+        void three_or_more_claims_are_uninsurable(int claims) {
+            assertThatThrownBy(() -> liabilityQuote(aPolicyholder().withClaims(claims).build()))
+                    .isInstanceOf(UninsurableException.class);
+        }
+    }
+
+    @Nested
+    class Horsepower {
+
+        @ParameterizedTest(name = "{0} hp pays {1}")
+        @CsvSource({
+            "150, 300.00", // up to 150: no factor
+            "151, 360.00", // 151 to 200: x 1.20
+            "200, 360.00",
+            "201, 420.00"  // above 200: x 1.40
+        })
+        void the_factor_steps_at_150_and_200_horsepower(int horsepower, String expected) {
+            BigDecimal premium = quote(aPolicyholder().build(), aVehicle().withHorsepower(horsepower).build(),
+                    Coverage.LIABILITY);
+
+            assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+    }
+
+    @Nested
+    class VehicleValue {
+
+        @Test
+        void full_cover_is_allowed_for_a_car_worth_exactly_100000_euros() {
+            BigDecimal premium = quote(aPolicyholder().build(), aVehicle().worth(100_000).build(), Coverage.FULL);
+
+            assertThat(premium).isEqualTo(new BigDecimal("600.00"));
+        }
+
+        @Test
+        void full_cover_is_uninsurable_for_a_car_worth_more_than_100000_euros() {
+            assertThatThrownBy(() -> quote(aPolicyholder().build(), aVehicle().worth(100_001).build(), Coverage.FULL))
+                    .isInstanceOf(UninsurableException.class);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"LIABILITY, 300.00", "PARTIAL, 420.00"})
+        void the_value_limit_only_applies_to_full_cover(Coverage coverage, String expected) {
+            BigDecimal premium = quote(aPolicyholder().build(), aVehicle().worth(100_001).build(), coverage);
+
+            assertThat(premium).isEqualTo(new BigDecimal(expected));
+        }
+    }
+
+    @Nested
+    class FactorsCombined {
+
+        @Test
+        void factors_multiply_together() {
+            // 1.50 (age 24) x 1.30 (two years licensed) x 1.20 (one claim) x 1.40 (201 hp)
+            Policyholder holder = aPolicyholder()
+                    .aged(24)
+                    .licensedForYears(2)
+                    .withClaims(1)
+                    .build();
+
+            BigDecimal premium = quote(holder, aVehicle().withHorsepower(201).build(), Coverage.LIABILITY);
+
+            assertThat(premium).isEqualTo(new BigDecimal("982.80")); // 300.00 x 3.276
+        }
+
+        @Test
+        void the_premium_is_rounded_to_cents_half_up() {
+            // 420.00 x 1.20 (age 75) x 1.30 (two years licensed) x 1.20 (one claim) x 1.20 (160 hp)
+            // = 943.488, which rounds to 943.49. Rounding down would give 943.48.
+            Policyholder holder = aPolicyholder().aged(75).licensedForYears(2).withClaims(1).build();
+
+            BigDecimal premium = quote(holder, aVehicle().withHorsepower(160).build(), Coverage.PARTIAL);
+
+            assertThat(premium).isEqualTo(new BigDecimal("943.49"));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

@@ -227,7 +227,7 @@ class EventBusTest {
             bus.subscribe(OrderPlaced.class, failing(third));
 
             EventDeliveryException failure = catchThrowableOfType(
-                    () -> bus.publish(ORDER), EventDeliveryException.class);
+                    EventDeliveryException.class, () -> bus.publish(ORDER));
 
             assertThat(failure.getSuppressed()).containsExactly(second, third);
         }
@@ -237,7 +237,7 @@ class EventBusTest {
             bus.subscribe(OrderPlaced.class, failing(new IllegalStateException("boom")));
 
             EventDeliveryException failure = catchThrowableOfType(
-                    () -> bus.publish(ORDER), EventDeliveryException.class);
+                    EventDeliveryException.class, () -> bus.publish(ORDER));
 
             assertThat(failure.event()).isSameAs(ORDER);
         }

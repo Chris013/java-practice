@@ -218,18 +218,677 @@ Test files:
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task15/GiftCardServiceTest.java -->
+**[`GiftCardServiceTest.java`](../src/test/java/io/github/chris013/practice/task15/GiftCardServiceTest.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class GiftCardServiceTest {
+
+    private static final GiftCardCode CODE = new GiftCardCode("ABCD-1234-EFGH");
+    private static final String PIN = "4711";
+    private static final String WRONG_PIN = "1234";
+    private static final LocalDate TODAY = LocalDate.of(2026, 3, 1);
+    private static final Instant NOON_TODAY = Instant.parse("2026-03-01T12:00:00Z");
+
+    private final CountingGiftCardRepository repository = new CountingGiftCardRepository();
+
+    private GiftCardService serviceAt(Instant now) {
+        return new GiftCardService(repository, Clock.fixed(now, ZoneOffset.UTC));
+    }
+
+    private GiftCardService service() {
+        return serviceAt(NOON_TODAY);
+    }
+
+    private GiftCard giveCard(String balance, LocalDate validUntil) {
+        GiftCard card = new GiftCard(CODE, PIN, new BigDecimal(balance), validUntil);
+        repository.seed(card);
+        return card;
+    }
+
+    private GiftCard giveValidCard(String balance) {
+        return giveCard(balance, TODAY.plusMonths(6));
+    }
+
+    private BigDecimal balanceOnCard() {
+        return repository.findByCode(CODE).orElseThrow().balance();
+    }
+
+    @Nested
+    class Outcomes {
+
+        @Test
+        void redeems_the_full_amount_when_the_card_covers_it() {
+            giveValidCard("20.00");
+
+            RedemptionResult result = service().redeem(CODE, PIN, new BigDecimal("12.50"));
+
+            assertThat(result).isEqualTo(new Redeemed(new BigDecimal("12.50"), new BigDecimal("7.50")));
+            assertThat(balanceOnCard()).isEqualByComparingTo("7.50");
+        }
+
+        @Test
+        void redeems_an_exact_balance_and_leaves_zero() {
+            giveValidCard("20.00");
+
+            RedemptionResult result = service().redeem(CODE, PIN, new BigDecimal("20.00"));
+
+            assertThat(result).isEqualTo(new Redeemed(new BigDecimal("20.00"), new BigDecimal("0.00")));
+        }
+
+        @Test
+        void partially_redeems_and_empties_the_card_when_the_balance_is_too_small() {
+            giveValidCard("5.00");
+
+            RedemptionResult result = service().redeem(CODE, PIN, new BigDecimal("12.50"));
+
+            assertThat(result).isEqualTo(new PartiallyRedeemed(new BigDecimal("5.00"), new BigDecimal("7.50")));
+            assertThat(balanceOnCard()).isEqualByComparingTo("0.00");
+        }
+
+        @Test
+        void declines_an_unknown_card() {
+            RedemptionResult result = service().redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.UNKNOWN_CARD));
+        }
+
+        @Test
+        void declines_a_wrong_pin_and_leaves_the_balance_alone() {
+            giveValidCard("20.00");
+
+            RedemptionResult result = service().redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            assertThat(balanceOnCard()).isEqualByComparingTo("20.00");
+        }
+
+        @Test
+        void reports_the_third_wrong_pin_as_a_blocked_card() {
+            giveValidCard("20.00");
+            GiftCardService service = service();
+
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.CARD_BLOCKED));
+        }
+
+        @Test
+        void a_blocked_card_stays_blocked_even_with_the_right_pin() {
+            giveValidCard("20.00");
+            GiftCardService service = service();
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+
+            RedemptionResult result = service.redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.CARD_BLOCKED));
+            assertThat(balanceOnCard()).isEqualByComparingTo("20.00");
+        }
+
+        @Test
+        void declines_an_expired_card_without_charging_it() {
+            giveCard("20.00", TODAY.minusDays(1));
+
+            RedemptionResult result = service().redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.EXPIRED));
+            assertThat(balanceOnCard()).isEqualByComparingTo("20.00");
+        }
+
+        @Test
+        void declines_an_empty_card() {
+            giveValidCard("0.00");
+
+            RedemptionResult result = service().redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.EMPTY));
+        }
+    }
+
+    @Nested
+    class ExpiryBoundary {
+
+        @Test
+        void a_card_is_valid_on_its_last_day_until_midnight() {
+            giveCard("20.00", TODAY);
+
+            RedemptionResult result = serviceAt(Instant.parse("2026-03-01T23:59:59Z")).redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Redeemed(new BigDecimal("1.00"), new BigDecimal("19.00")));
+        }
+
+        @Test
+        void a_card_has_expired_the_day_after_its_last_day() {
+            giveCard("20.00", TODAY);
+
+            RedemptionResult result = serviceAt(Instant.parse("2026-03-02T00:00:00Z")).redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.EXPIRED));
+        }
+    }
+
+    @Nested
+    class CheckOrder {
+
+        @Test
+        void a_wrong_pin_is_reported_before_expiry_and_still_counts() {
+            giveCard("20.00", TODAY.minusDays(1));
+            GiftCardService service = service();
+
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            assertThat(repository.saveCount()).isEqualTo(1);
+
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.CARD_BLOCKED));
+        }
+
+        @Test
+        void a_right_pin_on_an_expired_card_resets_the_counter_and_is_saved() {
+            giveCard("20.00", TODAY.minusDays(1));
+            GiftCardService service = service();
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+            service.redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+
+            assertThat(service.redeem(CODE, PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.EXPIRED));
+            assertThat(repository.saveCount()).isEqualTo(3);
+
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+            assertThat(service.redeem(CODE, WRONG_PIN, BigDecimal.ONE)).isEqualTo(new Declined(DeclineReason.WRONG_PIN));
+        }
+
+        @Test
+        void expiry_is_reported_before_an_empty_balance() {
+            giveCard("0.00", TODAY.minusDays(1));
+
+            RedemptionResult result = service().redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.EXPIRED));
+        }
+
+        @Test
+        void an_unknown_card_is_reported_before_anything_else() {
+            RedemptionResult result = service().redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+
+            assertThat(result).isEqualTo(new Declined(DeclineReason.UNKNOWN_CARD));
+        }
+    }
+
+    @Nested
+    class Persistence {
+
+        @Test
+        void saves_the_card_after_a_wrong_pin() {
+            giveValidCard("20.00");
+
+            service().redeem(CODE, WRONG_PIN, BigDecimal.ONE);
+
+            assertThat(repository.saveCount()).isEqualTo(1);
+        }
+
+        @Test
+        void saves_the_card_after_a_debit() {
+            giveValidCard("20.00");
+
+            service().redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(repository.saveCount()).isPositive();
+            assertThat(repository.lastSavedBalance()).isEqualByComparingTo("19.00");
+            assertThat(balanceOnCard()).isEqualByComparingTo("19.00");
+        }
+
+        @Test
+        void does_not_save_anything_for_an_unknown_card() {
+            service().redeem(CODE, PIN, BigDecimal.ONE);
+
+            assertThat(repository.saveCount()).isZero();
+        }
+    }
+
+    @Nested
+    class Amounts {
+
+        @Test
+        void accepts_trailing_zeros_in_the_amount() {
+            giveValidCard("20.00");
+
+            RedemptionResult result = service().redeem(CODE, PIN, new BigDecimal("12.500"));
+
+            assertThat(result).isEqualTo(new Redeemed(new BigDecimal("12.50"), new BigDecimal("7.50")));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"0", "0.00", "-1.00"})
+        void rejects_zero_and_negative_amounts(String amount) {
+            giveValidCard("20.00");
+
+            assertThatThrownBy(() -> service().redeem(CODE, PIN, new BigDecimal(amount)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(balanceOnCard()).isEqualByComparingTo("20.00");
+        }
+
+        @Test
+        void rejects_an_amount_with_more_than_two_decimals() {
+            giveValidCard("20.00");
+
+            assertThatThrownBy(() -> service().redeem(CODE, PIN, new BigDecimal("12.505")))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(balanceOnCard()).isEqualByComparingTo("20.00");
+        }
+
+        @Test
+        void rejects_null_arguments_with_a_null_pointer_exception() {
+            giveValidCard("20.00");
+            GiftCardService service = service();
+
+            assertThatThrownBy(() -> service.redeem(null, PIN, BigDecimal.ONE)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> service.redeem(CODE, null, BigDecimal.ONE)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> service.redeem(CODE, PIN, null)).isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task15/GiftCardTest.java -->
+**[`GiftCardTest.java`](../src/test/java/io/github/chris013/practice/task15/GiftCardTest.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class GiftCardTest {
+
+    private static final String PIN = "4711";
+    private static final String WRONG_PIN = "1234";
+
+    private static GiftCard card(String balance) {
+        return new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), PIN, new BigDecimal(balance), LocalDate.of(2026, 12, 31));
+    }
+
+    @Nested
+    class Construction {
+
+        @ParameterizedTest
+        @ValueSource(strings = {"", "123", "12345", "12a4", " 4711"})
+        void rejects_a_pin_that_is_not_exactly_four_digits(String pin) {
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), pin, BigDecimal.TEN, LocalDate.of(2026, 12, 31)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_negative_balance() {
+            assertThatThrownBy(() -> card("-0.01"))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_a_balance_with_more_than_two_decimals() {
+            assertThatThrownBy(() -> card("10.005"))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void accepts_a_zero_balance_and_keeps_two_decimals() {
+            GiftCard card = card("0");
+
+            assertThat(card.balance()).isEqualByComparingTo("0.00");
+            assertThat(card.balance().scale()).isEqualTo(2);
+        }
+
+        @Test
+        void rejects_nulls() {
+            assertThatThrownBy(() -> new GiftCard(null, PIN, BigDecimal.TEN, LocalDate.of(2026, 12, 31)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), null, BigDecimal.TEN, LocalDate.of(2026, 12, 31)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), PIN, null, LocalDate.of(2026, 12, 31)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new GiftCard(new GiftCardCode("ABCD-1234-EFGH"), PIN, BigDecimal.TEN, null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class PinAttempts {
+
+        @Test
+        void accepts_the_right_pin() {
+            GiftCard card = card("10.00");
+
+            assertThat(card.checkPin(PIN)).isTrue();
+            assertThat(card.isBlocked()).isFalse();
+        }
+
+        @Test
+        void rejects_a_wrong_pin() {
+            GiftCard card = card("10.00");
+
+            assertThat(card.checkPin(WRONG_PIN)).isFalse();
+            assertThat(card.isBlocked()).isFalse();
+        }
+
+        @Test
+        void blocks_the_card_on_the_third_consecutive_wrong_pin() {
+            GiftCard card = card("10.00");
+
+            card.checkPin(WRONG_PIN);
+            card.checkPin(WRONG_PIN);
+            assertThat(card.isBlocked()).isFalse();
+
+            assertThat(card.checkPin(WRONG_PIN)).isFalse();
+            assertThat(card.isBlocked()).isTrue();
+        }
+
+        @Test
+        void a_right_pin_resets_the_counter_of_wrong_attempts() {
+            GiftCard card = card("10.00");
+
+            card.checkPin(WRONG_PIN);
+            card.checkPin(WRONG_PIN);
+            card.checkPin(PIN);
+            card.checkPin(WRONG_PIN);
+            card.checkPin(WRONG_PIN);
+
+            assertThat(card.isBlocked()).isFalse();
+            card.checkPin(WRONG_PIN);
+            assertThat(card.isBlocked()).isTrue();
+        }
+
+        @Test
+        void a_blocked_card_rejects_even_the_right_pin_and_stays_blocked() {
+            GiftCard card = card("10.00");
+            card.checkPin(WRONG_PIN);
+            card.checkPin(WRONG_PIN);
+            card.checkPin(WRONG_PIN);
+
+            assertThat(card.checkPin(PIN)).isFalse();
+            assertThat(card.isBlocked()).isTrue();
+        }
+    }
+
+    @Nested
+    class Debit {
+
+        @Test
+        void takes_the_amount_off_the_balance() {
+            GiftCard card = card("10.00");
+
+            card.debit(new BigDecimal("2.50"));
+
+            assertThat(card.balance()).isEqualByComparingTo("7.50");
+        }
+
+        @Test
+        void allows_debiting_the_whole_balance() {
+            GiftCard card = card("10.00");
+
+            card.debit(new BigDecimal("10.00"));
+
+            assertThat(card.balance()).isEqualByComparingTo("0.00");
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"0", "0.00", "-1.00"})
+        void rejects_zero_and_negative_amounts(String amount) {
+            GiftCard card = card("10.00");
+
+            assertThatThrownBy(() -> card.debit(new BigDecimal(amount)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(card.balance()).isEqualByComparingTo("10.00");
+        }
+
+        @Test
+        void rejects_an_amount_above_the_balance_and_keeps_the_balance() {
+            GiftCard card = card("10.00");
+
+            assertThatThrownBy(() -> card.debit(new BigDecimal("10.01")))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(card.balance()).isEqualByComparingTo("10.00");
+        }
+
+        @Test
+        void rejects_an_amount_with_more_than_two_decimals() {
+            GiftCard card = card("10.00");
+
+            assertThatThrownBy(() -> card.debit(new BigDecimal("1.005")))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(card.balance()).isEqualByComparingTo("10.00");
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task15/GiftCardCodeTest.java -->
+**[`GiftCardCodeTest.java`](../src/test/java/io/github/chris013/practice/task15/GiftCardCodeTest.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class GiftCardCodeTest {
+
+    @Nested
+    class Format {
+
+        @Test
+        void accepts_the_printed_format() {
+            assertThat(new GiftCardCode("ABCD-1234-EFGH").value()).isEqualTo("ABCD-1234-EFGH");
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "abcd-1234-efgh, ABCD-1234-EFGH",
+            "a1b2-c3d4-e5f6, A1B2-C3D4-E5F6",
+            "0000-ZZZZ-9999, 0000-ZZZZ-9999"
+        })
+        void upper_cases_the_code(String input, String expected) {
+            assertThat(new GiftCardCode(input).value()).isEqualTo(expected);
+        }
+
+        @Test
+        void trims_surrounding_whitespace_before_checking_the_format() {
+            assertThat(new GiftCardCode(" abcd-1234-efgh ").value()).isEqualTo("ABCD-1234-EFGH");
+        }
+
+        @Test
+        void equal_codes_after_normalisation_are_equal() {
+            assertThat(new GiftCardCode("abcd-1234-efgh")).isEqualTo(new GiftCardCode("ABCD-1234-EFGH"));
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {
+            "",
+            "   ",
+            "ABCD1234EFGH",
+            "ABCD-1234-EFG",
+            "ABCD-1234-EFGHI",
+            "ABCD-12-EFGH",
+            "ABCD_1234_EFGH",
+            "ABCD-1234-EFGé",
+            "ABCD-1234-EFGH-"
+        })
+        void rejects_a_wrong_format_with_an_illegal_argument(String value) {
+            assertThatThrownBy(() -> new GiftCardCode(value))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void rejects_null() {
+            assertThatThrownBy(() -> new GiftCardCode(null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task15/CashierMessagesTest.java -->
+**[`CashierMessagesTest.java`](../src/test/java/io/github/chris013/practice/task15/CashierMessagesTest.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.math.BigDecimal;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+
+class CashierMessagesTest {
+
+    @Nested
+    class Redemptions {
+
+        @Test
+        void full_redemption_shows_the_charge_and_the_remaining_balance() {
+            RedemptionResult result = new Redeemed(new BigDecimal("12.50"), new BigDecimal("7.50"));
+
+            assertThat(CashierMessages.forResult(result))
+                    .isEqualTo("Paid 12.50 EUR with gift card. Remaining balance: 7.50 EUR.");
+        }
+
+        @Test
+        void partial_redemption_tells_the_cashier_what_to_collect() {
+            RedemptionResult result = new PartiallyRedeemed(new BigDecimal("5.00"), new BigDecimal("7.50"));
+
+            assertThat(CashierMessages.forResult(result))
+                    .isEqualTo("Gift card covered 5.00 EUR. Please collect 7.50 EUR.");
+        }
+
+        @Test
+        void amounts_always_show_two_decimals() {
+            RedemptionResult result = new Redeemed(new BigDecimal("12.5"), new BigDecimal("7"));
+
+            assertThat(CashierMessages.forResult(result))
+                    .isEqualTo("Paid 12.50 EUR with gift card. Remaining balance: 7.00 EUR.");
+        }
+    }
+
+    @Nested
+    class Declines {
+
+        @Test
+        void unknown_card() {
+            assertThat(message(DeclineReason.UNKNOWN_CARD)).isEqualTo("Gift card not found. Please check the code.");
+        }
+
+        @Test
+        void wrong_pin() {
+            assertThat(message(DeclineReason.WRONG_PIN)).isEqualTo("Wrong PIN. Please try again.");
+        }
+
+        @Test
+        void blocked_card() {
+            assertThat(message(DeclineReason.CARD_BLOCKED))
+                    .isEqualTo("Gift card blocked after too many wrong PINs. Refer the customer to the service desk.");
+        }
+
+        @Test
+        void expired_card() {
+            assertThat(message(DeclineReason.EXPIRED)).isEqualTo("Gift card expired.");
+        }
+
+        @Test
+        void empty_card() {
+            assertThat(message(DeclineReason.EMPTY)).isEqualTo("Gift card has no balance left.");
+        }
+
+        @ParameterizedTest
+        @EnumSource(DeclineReason.class)
+        void every_decline_reason_has_a_message_for_the_cashier(DeclineReason reason) {
+            assertThat(message(reason)).isNotBlank();
+        }
+
+        private String message(DeclineReason reason) {
+            return CashierMessages.forResult(new Declined(reason));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: src/test/java/io/github/chris013/practice/task15/CountingGiftCardRepository.java -->
+**[`CountingGiftCardRepository.java`](../src/test/java/io/github/chris013/practice/task15/CountingGiftCardRepository.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import java.math.BigDecimal;
+import java.util.Optional;
+
+/**
+ * Wraps the in-memory repository and counts the saves, so tests can check when the service persists a card.
+ * It also remembers the balance at the last save, so a test can check that the debit was saved.
+ */
+final class CountingGiftCardRepository implements GiftCardRepository {
+
+    private final InMemoryGiftCardRepository delegate = new InMemoryGiftCardRepository();
+    private int saves;
+    private BigDecimal lastSavedBalance;
+
+    /** Puts a card in place without counting it, as if it had been stored before the test started. */
+    void seed(GiftCard card) {
+        delegate.save(card);
+    }
+
+    @Override
+    public Optional<GiftCard> findByCode(GiftCardCode code) {
+        return delegate.findByCode(code);
+    }
+
+    @Override
+    public void save(GiftCard card) {
+        saves++;
+        lastSavedBalance = card.balance();
+        delegate.save(card);
+    }
+
+    int saveCount() {
+        return saves;
+    }
+
+    /** The balance that was written by the most recent save, or {@code null} if nothing was saved yet. */
+    BigDecimal lastSavedBalance() {
+        return lastSavedBalance;
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -280,15 +939,287 @@ Test files:
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task15/GiftCardService.java -->
+**[`GiftCardService.java`](../solutions/src/main/java/io/github/chris013/practice/task15/GiftCardService.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import static io.github.chris013.practice.task15.DeclineReason.CARD_BLOCKED;
+import static io.github.chris013.practice.task15.DeclineReason.EMPTY;
+import static io.github.chris013.practice.task15.DeclineReason.EXPIRED;
+import static io.github.chris013.practice.task15.DeclineReason.UNKNOWN_CARD;
+import static io.github.chris013.practice.task15.DeclineReason.WRONG_PIN;
+
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * Redeems gift cards at the till.
+ *
+ * <p>The checks run in a fixed order, and the order is part of the behaviour: a wrong PIN is counted even on an
+ * expired card, and an expired card is reported as expired even when its balance is zero.
+ */
+public final class GiftCardService {
+
+    private final GiftCardRepository repository;
+    private final Clock clock;
+
+    public GiftCardService(GiftCardRepository repository, Clock clock) {
+        this.repository = Objects.requireNonNull(repository, "repository");
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    /**
+     * Tries to pay {@code amount} with the card.
+     *
+     * <p>Business outcomes (unknown card, wrong PIN, blocked, expired, empty) are returned as a {@link RedemptionResult}.
+     *
+     * @throws NullPointerException     if an argument is null
+     * @throws IllegalArgumentException if the amount is zero, negative or has more than 2 decimals
+     */
+    public RedemptionResult redeem(GiftCardCode code, String pin, BigDecimal amount) {
+        Objects.requireNonNull(code, "code");
+        Objects.requireNonNull(pin, "pin");
+        Objects.requireNonNull(amount, "amount");
+        if (amount.signum() <= 0) {
+            throw new IllegalArgumentException("A redemption must be positive, got " + amount.toPlainString());
+        }
+        BigDecimal requested = GiftCard.requireCents(amount, "amount");
+
+        Optional<GiftCard> found = repository.findByCode(code);
+        if (found.isEmpty()) {
+            return new Declined(UNKNOWN_CARD);
+        }
+        GiftCard card = found.get();
+        if (card.isBlocked()) {
+            return new Declined(CARD_BLOCKED);
+        }
+
+        boolean pinAccepted = card.checkPin(pin);
+        // Save after every PIN attempt: the counter changed (or was reset), and a lost counter lets a thief keep guessing.
+        repository.save(card);
+        if (!pinAccepted) {
+            // The attempt that blocks the card is reported as CARD_BLOCKED, so the cashier knows to refer the customer.
+            return new Declined(card.isBlocked() ? CARD_BLOCKED : WRONG_PIN);
+        }
+
+        // Valid on the last day itself: expired only once today is after validUntil.
+        if (LocalDate.now(clock).isAfter(card.validUntil())) {
+            return new Declined(EXPIRED);
+        }
+        if (card.balance().signum() == 0) {
+            return new Declined(EMPTY);
+        }
+
+        BigDecimal charged = card.balance().min(requested);
+        card.debit(charged);
+        repository.save(card);
+
+        if (charged.compareTo(requested) == 0) {
+            return new Redeemed(charged, card.balance());
+        }
+        return new PartiallyRedeemed(charged, requested.subtract(charged));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task15/GiftCard.java -->
+**[`GiftCard.java`](../solutions/src/main/java/io/github/chris013/practice/task15/GiftCard.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.Objects;
+import java.util.regex.Pattern;
+
+/**
+ * A prepaid gift card. Mutable on purpose: the balance and the PIN counter change with every redemption.
+ * Identity is the {@link GiftCardCode}.
+ *
+ * <p>The PIN is stored as given. Hashing it is a stretch goal of task 15.
+ */
+public final class GiftCard {
+
+    static final int MAX_CONSECUTIVE_WRONG_PINS = 3;
+    private static final Pattern PIN_FORMAT = Pattern.compile("\\d{4}");
+
+    private final GiftCardCode code;
+    private final String pin;
+    private final LocalDate validUntil;
+    private BigDecimal balance;
+    private int consecutiveWrongPins;
+    private boolean blocked;
+
+    public GiftCard(GiftCardCode code, String pin, BigDecimal balance, LocalDate validUntil) {
+        this.code = Objects.requireNonNull(code, "code");
+        Objects.requireNonNull(pin, "pin");
+        if (!PIN_FORMAT.matcher(pin).matches()) {
+            // Never put the PIN itself into a message: messages end up in logs.
+            throw new IllegalArgumentException("A PIN has exactly 4 digits");
+        }
+        this.pin = pin;
+        Objects.requireNonNull(balance, "balance");
+        if (balance.signum() < 0) {
+            throw new IllegalArgumentException("A gift card balance cannot be negative, got " + balance.toPlainString());
+        }
+        this.balance = requireCents(balance, "balance");
+        this.validUntil = Objects.requireNonNull(validUntil, "validUntil");
+    }
+
+    public GiftCardCode code() {
+        return code;
+    }
+
+    public BigDecimal balance() {
+        return balance;
+    }
+
+    public LocalDate validUntil() {
+        return validUntil;
+    }
+
+    public boolean isBlocked() {
+        return blocked;
+    }
+
+    /**
+     * Checks a PIN attempt. A right PIN resets the counter of consecutive wrong attempts. A wrong PIN increments it,
+     * and the third consecutive wrong PIN blocks the card. A blocked card always returns {@code false}, and its
+     * counter no longer changes.
+     */
+    public boolean checkPin(String attempt) {
+        Objects.requireNonNull(attempt, "attempt");
+        if (blocked) {
+            return false;
+        }
+        if (pin.equals(attempt)) {
+            consecutiveWrongPins = 0;
+            return true;
+        }
+        consecutiveWrongPins++;
+        if (consecutiveWrongPins >= MAX_CONSECUTIVE_WRONG_PINS) {
+            blocked = true;
+        }
+        return false;
+    }
+
+    /**
+     * Takes {@code amount} off the balance.
+     *
+     * @throws IllegalArgumentException if the amount is zero, negative, has more than 2 decimals or exceeds the balance
+     */
+    public void debit(BigDecimal amount) {
+        BigDecimal cents = requireCents(amount, "amount");
+        if (cents.signum() <= 0) {
+            throw new IllegalArgumentException("A debit must be positive, got " + cents.toPlainString());
+        }
+        if (cents.compareTo(balance) > 0) {
+            throw new IllegalArgumentException(
+                    "Cannot debit %s from a balance of %s".formatted(cents.toPlainString(), balance.toPlainString()));
+        }
+        balance = balance.subtract(cents);
+    }
+
+    /**
+     * Returns {@code value} with scale 2. Rejects values that have more than 2 significant decimals, so that
+     * {@code 12.5} and {@code 12.500} are accepted and {@code 12.505} is not. Comparing with {@code equals} would
+     * make {@code 12.5} and {@code 12.50} different, so we normalise the scale once, here.
+     */
+    static BigDecimal requireCents(BigDecimal value, String name) {
+        Objects.requireNonNull(value, name);
+        if (value.stripTrailingZeros().scale() > 2) {
+            throw new IllegalArgumentException(name + " has at most 2 decimals, got " + value.toPlainString());
+        }
+        return value.setScale(2);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task15/GiftCardCode.java -->
+**[`GiftCardCode.java`](../solutions/src/main/java/io/github/chris013/practice/task15/GiftCardCode.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import java.util.Locale;
+import java.util.Objects;
+import java.util.regex.Pattern;
+
+/**
+ * The printed code on a gift card, e.g. {@code ABCD-1234-EFGH}.
+ *
+ * <p>The constructor trims and upper-cases the input first, so {@code " abcd-1234-efgh "} is the same code as
+ * {@code ABCD-1234-EFGH}. Invalid formats are a programming error, not a business outcome: the till validates
+ * the format before it calls the service. The message does not echo the code, because a code is a secret too.
+ */
+public record GiftCardCode(String value) {
+
+    private static final Pattern FORMAT = Pattern.compile("[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}");
+
+    public GiftCardCode {
+        Objects.requireNonNull(value, "value");
+        value = value.trim().toUpperCase(Locale.ROOT);
+        if (!FORMAT.matcher(value).matches()) {
+            throw new IllegalArgumentException("A gift card code looks like XXXX-XXXX-XXXX with letters A-Z and digits 0-9");
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task15/CashierMessages.java -->
+**[`CashierMessages.java`](../solutions/src/main/java/io/github/chris013/practice/task15/CashierMessages.java)**
+
+```java
+package io.github.chris013.practice.task15;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
+/**
+ * The text the cashier's screen shows for each outcome. Task 15: read {@code tasks/15-gift-card-results.md} first.
+ *
+ * <p>The switch is exhaustive and has no {@code default}. Adding a result type or a {@link DeclineReason} is a
+ * compile error here, so nobody can ship a till that shows "Unknown error" for a new case.
+ */
+public final class CashierMessages {
+
+    private CashierMessages() {}
+
+    /** One exhaustive switch over the result type. There is deliberately no {@code default} branch. */
+    public static String forResult(RedemptionResult result) {
+        return switch (result) {
+            case Redeemed(BigDecimal charged, BigDecimal remainingBalance) ->
+                    "Paid %s EUR with gift card. Remaining balance: %s EUR.".formatted(euros(charged), euros(remainingBalance));
+            case PartiallyRedeemed(BigDecimal charged, BigDecimal stillToPay) ->
+                    "Gift card covered %s EUR. Please collect %s EUR.".formatted(euros(charged), euros(stillToPay));
+            case Declined(DeclineReason reason) -> forDecline(reason);
+        };
+    }
+
+    /** A nested switch over the enum. It is exhaustive too, so a new reason is a compile error here as well. */
+    private static String forDecline(DeclineReason reason) {
+        return switch (reason) {
+            case UNKNOWN_CARD -> "Gift card not found. Please check the code.";
+            case WRONG_PIN -> "Wrong PIN. Please try again.";
+            case CARD_BLOCKED -> "Gift card blocked after too many wrong PINs. Refer the customer to the service desk.";
+            case EXPIRED -> "Gift card expired.";
+            case EMPTY -> "Gift card has no balance left.";
+        };
+    }
+
+    private static String euros(BigDecimal amount) {
+        return amount.setScale(2, RoundingMode.HALF_UP).toPlainString();
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

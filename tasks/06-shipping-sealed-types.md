@@ -167,6 +167,177 @@ Run: `mvn test -Dtest='**/task06/**'`
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task06/ShippingRatesTest.java -->
+**[`ShippingRatesTest.java`](../src/test/java/io/github/chris013/practice/task06/ShippingRatesTest.java)**
+
+```java
+package io.github.chris013.practice.task06;
+
+import static io.github.chris013.practice.task06.Zone.DOMESTIC;
+import static io.github.chris013.practice.task06.Zone.EU;
+import static io.github.chris013.practice.task06.Zone.WORLD;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.math.BigDecimal;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+
+class ShippingRatesTest {
+
+    private static final Dimensions SHOE_BOX = new Dimensions(35, 20, 12);
+
+    private final ShippingRates rates = new ShippingRates();
+
+    @Nested
+    class Letters {
+
+        @ParameterizedTest(name = "{0} g cost {1}")
+        @CsvSource({"1, 0.95", "20, 0.95", "21, 1.60", "500, 1.60", "501, 2.75", "1000, 2.75"})
+        void are_priced_by_weight_tier(int grams, String expectedPrice) {
+            assertThat(rates.priceFor(new Letter(grams), DOMESTIC)).isEqualByComparingTo(expectedPrice);
+        }
+
+        @Test
+        void cost_more_abroad_rounded_half_up_to_cents() {
+            assertThat(rates.priceFor(new Letter(20), EU)).isEqualByComparingTo("1.43"); // 0.95 x 1.5 = 1.425
+            assertThat(rates.priceFor(new Letter(20), WORLD)).isEqualByComparingTo("2.38"); // 0.95 x 2.5 = 2.375
+        }
+
+        @Test
+        void must_have_a_plausible_weight() {
+            assertThatThrownBy(() -> new Letter(0)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new Letter(1001))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("1001");
+        }
+    }
+
+    @Nested
+    class Parcels {
+
+        @Test
+        void are_priced_by_actual_weight_when_they_are_compact() {
+            assertThat(rates.priceFor(new Parcel(1500, SHOE_BOX), DOMESTIC)).isEqualByComparingTo("4.99");
+        }
+
+        @ParameterizedTest(name = "{0} g cost {1}")
+        @CsvSource({"2000, 4.99", "2001, 6.99", "5000, 6.99", "5001, 9.99", "10000, 9.99", "10001, 16.99", "31500, 16.99"})
+        void are_priced_by_weight_tier(int grams, String expectedPrice) {
+            assertThat(rates.priceFor(new Parcel(grams, SHOE_BOX), DOMESTIC)).isEqualByComparingTo(expectedPrice);
+        }
+
+        @Test
+        void are_priced_by_volumetric_weight_when_they_are_light_but_bulky() {
+            // 60 x 40 x 40 cm = 96,000 cm³ -> 19.2 kg volumetric weight
+            Parcel pillows = new Parcel(1000, new Dimensions(60, 40, 40));
+
+            assertThat(pillows.billableWeightGrams()).isEqualTo(19_200);
+            assertThat(rates.priceFor(pillows, DOMESTIC)).isEqualByComparingTo("16.99");
+        }
+
+        @Test
+        void round_volumetric_weight_up_to_the_next_gram() {
+            assertThat(new Parcel(1, new Dimensions(1, 1, 7)).billableWeightGrams()).isEqualTo(2); // 7 cm³ / 5 = 1.4 g
+        }
+
+        @Test
+        void cost_more_abroad() {
+            assertThat(rates.priceFor(new Parcel(1500, SHOE_BOX), EU)).isEqualByComparingTo("7.49"); // 4.99 x 1.5
+            assertThat(rates.priceFor(new Parcel(1500, SHOE_BOX), WORLD)).isEqualByComparingTo("12.48"); // 4.99 x 2.5
+        }
+
+        @Test
+        void cannot_be_shipped_above_31_5_kg_billable_weight() {
+            assertThatThrownBy(() -> rates.priceFor(new Parcel(31_501, SHOE_BOX), DOMESTIC))
+                    .isInstanceOf(NotShippableException.class);
+            assertThatThrownBy(() -> rates.priceFor(new Parcel(5000, new Dimensions(80, 60, 40)), DOMESTIC))
+                    .isInstanceOf(NotShippableException.class);
+        }
+
+        @Test
+        void must_have_a_positive_weight_and_dimensions() {
+            assertThatThrownBy(() -> new Parcel(0, SHOE_BOX)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new Parcel(100, null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new Dimensions(10, 0, 10)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class Pallets {
+
+        @Test
+        void cost_a_flat_rate_up_to_300_kg() {
+            assertThat(rates.priceFor(new Pallet(250, true), DOMESTIC)).isEqualByComparingTo("89.00");
+            assertThat(rates.priceFor(new Pallet(300, true), DOMESTIC)).isEqualByComparingTo("89.00");
+        }
+
+        @ParameterizedTest(name = "{0} kg cost {1}")
+        @CsvSource({"301, 101.00", "400, 101.00", "401, 113.00", "1000, 173.00"})
+        void cost_extra_per_started_100_kg_above_300_kg(int kilograms, String expectedPrice) {
+            assertThat(rates.priceFor(new Pallet(kilograms, true), DOMESTIC)).isEqualByComparingTo(expectedPrice);
+        }
+
+        @Test
+        void cost_25_percent_more_when_not_stackable() {
+            assertThat(rates.priceFor(new Pallet(250, false), DOMESTIC)).isEqualByComparingTo("111.25");
+        }
+
+        @Test
+        void can_be_shipped_within_the_eu() {
+            assertThat(rates.priceFor(new Pallet(250, true), EU)).isEqualByComparingTo("133.50");
+        }
+
+        @Test
+        void cannot_be_shipped_outside_the_eu() {
+            assertThatThrownBy(() -> rates.priceFor(new Pallet(250, true), WORLD))
+                    .isInstanceOf(NotShippableException.class);
+        }
+
+        @Test
+        void must_weigh_between_1_and_1000_kg() {
+            assertThatThrownBy(() -> new Pallet(0, true)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> new Pallet(1001, true)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class TransitDays {
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource({"DOMESTIC, 1", "EU, 3", "WORLD, 7"})
+        void for_letters(Zone zone, int days) {
+            assertThat(rates.transitDays(new Letter(20), zone)).isEqualTo(days);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource({"DOMESTIC, 2", "EU, 4", "WORLD, 8"})
+        void for_parcels(Zone zone, int days) {
+            assertThat(rates.transitDays(new Parcel(1000, SHOE_BOX), zone)).isEqualTo(days);
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource({"DOMESTIC, 3", "EU, 5"})
+        void for_pallets(Zone zone, int days) {
+            assertThat(rates.transitDays(new Pallet(250, true), zone)).isEqualTo(days);
+        }
+
+        @Test
+        void are_not_promised_for_shipments_we_cannot_ship() {
+            assertThatThrownBy(() -> rates.transitDays(new Pallet(250, true), WORLD))
+                    .isInstanceOf(NotShippableException.class);
+        }
+    }
+
+    @Test
+    void prices_are_always_in_cents() {
+        BigDecimal price = rates.priceFor(new Letter(20), EU);
+
+        assertThat(price.scale()).isEqualTo(2);
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -212,21 +383,221 @@ Run: `mvn test -Dtest='**/task06/**'`
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task06/ShippingRates.java -->
+**[`ShippingRates.java`](../solutions/src/main/java/io/github/chris013/practice/task06/ShippingRates.java)**
+
+```java
+package io.github.chris013.practice.task06;
+
+import static io.github.chris013.practice.task06.Zone.WORLD;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.Collections;
+import java.util.Map;
+import java.util.NavigableMap;
+import java.util.TreeMap;
+
+/**
+ * Our price list and delivery promises.
+ *
+ * <p>Every operation is one exhaustive {@code switch} over the sealed {@link Shipment} hierarchy, with no
+ * {@code default} branch. Adding a new kind of shipment therefore fails to compile until every operation handles it.
+ */
+public final class ShippingRates {
+
+    /** Price of the cheapest tier whose maximum weight (in grams, inclusive) is at least the shipment's weight. */
+    private static final NavigableMap<Integer, BigDecimal> LETTER_PRICES = tiers(Map.of(
+            20, "0.95",
+            500, "1.60",
+            1000, "2.75"));
+
+    private static final NavigableMap<Integer, BigDecimal> PARCEL_PRICES = tiers(Map.of(
+            2_000, "4.99",
+            5_000, "6.99",
+            10_000, "9.99",
+            31_500, "16.99"));
+
+    private static final BigDecimal PALLET_BASE_PRICE = new BigDecimal("89.00");
+    private static final int PALLET_KG_INCLUDED = 300;
+    private static final int PALLET_SURCHARGE_STEP_KG = 100;
+    private static final BigDecimal PALLET_SURCHARGE_PER_STEP = new BigDecimal("12.00");
+    private static final BigDecimal NON_STACKABLE_FACTOR = new BigDecimal("1.25");
+
+    public BigDecimal priceFor(Shipment shipment, Zone zone) {
+        BigDecimal domesticPrice = switch (shipment) {
+            case Letter(int weightGrams) -> tierPrice(LETTER_PRICES, weightGrams, shipment);
+            case Parcel parcel -> tierPrice(PARCEL_PRICES, parcel.billableWeightGrams(), shipment);
+            case Pallet pallet when zone == WORLD -> throw palletsStayInEurope(pallet);
+            case Pallet(int weightKg, boolean stackable) -> palletPrice(weightKg, stackable);
+        };
+        return domesticPrice.multiply(zone.priceFactor()).setScale(2, RoundingMode.HALF_UP);
+    }
+
+    public int transitDays(Shipment shipment, Zone zone) {
+        return switch (shipment) {
+            case Letter letter -> switch (zone) {
+                case DOMESTIC -> 1;
+                case EU -> 3;
+                case WORLD -> 7;
+            };
+            case Parcel parcel -> switch (zone) {
+                case DOMESTIC -> 2;
+                case EU -> 4;
+                case WORLD -> 8;
+            };
+            case Pallet pallet -> switch (zone) {
+                case DOMESTIC -> 3;
+                case EU -> 5;
+                case WORLD -> throw palletsStayInEurope(pallet);
+            };
+        };
+    }
+
+    private static BigDecimal tierPrice(NavigableMap<Integer, BigDecimal> tiers, int weightGrams, Shipment shipment) {
+        Map.Entry<Integer, BigDecimal> tier = tiers.ceilingEntry(weightGrams);
+        if (tier == null) {
+            throw new NotShippableException("%s is too heavy: %d g billable, at most %d g allowed"
+                    .formatted(shipment, weightGrams, tiers.lastKey()));
+        }
+        return tier.getValue();
+    }
+
+    private static BigDecimal palletPrice(int weightKg, boolean stackable) {
+        int startedSteps = Math.ceilDiv(Math.max(0, weightKg - PALLET_KG_INCLUDED), PALLET_SURCHARGE_STEP_KG);
+        BigDecimal price = PALLET_BASE_PRICE.add(PALLET_SURCHARGE_PER_STEP.multiply(BigDecimal.valueOf(startedSteps)));
+        return stackable ? price : price.multiply(NON_STACKABLE_FACTOR);
+    }
+
+    private static NotShippableException palletsStayInEurope(Pallet pallet) {
+        return new NotShippableException("We ship pallets within the EU only: " + pallet);
+    }
+
+    private static NavigableMap<Integer, BigDecimal> tiers(Map<Integer, String> pricesByMaxWeight) {
+        NavigableMap<Integer, BigDecimal> tiers = new TreeMap<>();
+        pricesByMaxWeight.forEach((maxWeight, price) -> tiers.put(maxWeight, new BigDecimal(price)));
+        return Collections.unmodifiableNavigableMap(tiers);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task06/Parcel.java -->
+**[`Parcel.java`](../solutions/src/main/java/io/github/chris013/practice/task06/Parcel.java)**
+
+```java
+package io.github.chris013.practice.task06;
+
+import java.util.Objects;
+
+public record Parcel(int weightGrams, Dimensions dimensions) implements Shipment {
+
+    public Parcel {
+        if (weightGrams < 1) {
+            throw new IllegalArgumentException("A parcel must weigh at least 1 g, not %d g".formatted(weightGrams));
+        }
+        Objects.requireNonNull(dimensions, "dimensions");
+    }
+
+    /** What we charge for: the actual weight, or the volumetric weight if the parcel is light but bulky. */
+    public int billableWeightGrams() {
+        return Math.max(weightGrams, dimensions.volumetricWeightGrams());
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task06/Dimensions.java -->
+**[`Dimensions.java`](../solutions/src/main/java/io/github/chris013/practice/task06/Dimensions.java)**
+
+```java
+package io.github.chris013.practice.task06;
+
+/** Outer dimensions of a parcel in centimetres. */
+public record Dimensions(int lengthCm, int widthCm, int heightCm) {
+
+    /** Carriers bill bulky parcels as if 5000 cm³ weighed 1 kg, i.e. 5 cm³ per gram. */
+    private static final int CUBIC_CM_PER_VOLUMETRIC_GRAM = 5;
+
+    public Dimensions {
+        if (lengthCm < 1 || widthCm < 1 || heightCm < 1) {
+            throw new IllegalArgumentException(
+                    "Dimensions must be positive, got %d x %d x %d cm".formatted(lengthCm, widthCm, heightCm));
+        }
+    }
+
+    int volumetricWeightGrams() {
+        return Math.ceilDiv(lengthCm * widthCm * heightCm, CUBIC_CM_PER_VOLUMETRIC_GRAM);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task06/Letter.java -->
+**[`Letter.java`](../solutions/src/main/java/io/github/chris013/practice/task06/Letter.java)**
+
+```java
+package io.github.chris013.practice.task06;
+
+/** A letter or large letter, up to 1000 g. */
+public record Letter(int weightGrams) implements Shipment {
+
+    static final int MAX_WEIGHT_GRAMS = 1000;
+
+    public Letter {
+        if (weightGrams < 1 || weightGrams > MAX_WEIGHT_GRAMS) {
+            throw new IllegalArgumentException(
+                    "A letter weighs 1 to %d g, not %d g. Heavier items are parcels.".formatted(MAX_WEIGHT_GRAMS, weightGrams));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task06/Pallet.java -->
+**[`Pallet.java`](../solutions/src/main/java/io/github/chris013/practice/task06/Pallet.java)**
+
+```java
+package io.github.chris013.practice.task06;
+
+/** A standard euro pallet, up to 1000 kg. Non-stackable pallets take up the space above them as well. */
+public record Pallet(int weightKg, boolean stackable) implements Shipment {
+
+    static final int MAX_WEIGHT_KG = 1000;
+
+    public Pallet {
+        if (weightKg < 1 || weightKg > MAX_WEIGHT_KG) {
+            throw new IllegalArgumentException("A pallet weighs 1 to %d kg, not %d kg".formatted(MAX_WEIGHT_KG, weightKg));
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task06/Zone.java -->
+**[`Zone.java`](../solutions/src/main/java/io/github/chris013/practice/task06/Zone.java)**
+
+```java
+package io.github.chris013.practice.task06;
+
+import java.math.BigDecimal;
+
+/** Where a shipment goes, seen from our depot in Germany. */
+public enum Zone {
+    DOMESTIC("1.0"),
+    EU("1.5"),
+    WORLD("2.5");
+
+    private final BigDecimal priceFactor;
+
+    Zone(String priceFactor) {
+        this.priceFactor = new BigDecimal(priceFactor);
+    }
+
+    BigDecimal priceFactor() {
+        return priceFactor;
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

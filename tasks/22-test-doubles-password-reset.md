@@ -164,6 +164,192 @@ This task differs from the others. The production code is complete, so the start
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task22/PasswordResetServiceMockistTest.java -->
+**[`PasswordResetServiceMockistTest.java`](../src/test/java/io/github/chris013/practice/task22/PasswordResetServiceMockistTest.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Optional;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+/**
+ * Every collaborator is a mock and every interaction is verified. It passes today, and it is also
+ * the kind of test that breaks the moment someone refactors without changing behaviour.
+ */
+@ExtendWith(MockitoExtension.class)
+class PasswordResetServiceMockistTest {
+
+    private static final EmailAddress EMAIL = new EmailAddress("anna@example.com");
+    private static final UserId ANNA = new UserId("anna");
+    private static final User USER = new User(ANNA, EMAIL, "old-hash");
+    private static final Instant NOW = Instant.parse("2026-11-09T10:00:00Z");
+
+    @Mock
+    private UserRepository users;
+    @Mock
+    private ResetTokenStore tokens;
+    @Mock
+    private TokenGenerator generator;
+    @Mock
+    private PasswordHasher hasher;
+    @Mock
+    private Mailer mailer;
+
+    private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+    private PasswordResetService service;
+
+    @BeforeEach
+    void createService() {
+        service = new PasswordResetService(users, tokens, generator, hasher, mailer, clock);
+    }
+
+    @Test
+    void unknown_email_does_nothing() {
+        when(users.findByEmail(EMAIL)).thenReturn(Optional.empty());
+
+        service.requestReset(EMAIL);
+
+        verify(users).findByEmail(EMAIL);
+        verifyNoInteractions(tokens, generator, mailer);
+        verifyNoMoreInteractions(users);
+    }
+
+    @Test
+    void stores_a_token_and_mails_the_link_in_this_order() {
+        when(users.findByEmail(EMAIL)).thenReturn(Optional.of(USER));
+        when(tokens.findByUser(ANNA)).thenReturn(List.of());
+        when(generator.newToken()).thenReturn("raw-token");
+
+        service.requestReset(EMAIL);
+
+        ArgumentCaptor<ResetToken> stored = ArgumentCaptor.forClass(ResetToken.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        InOrder inOrder = inOrder(users, tokens, generator, mailer);
+        inOrder.verify(users).findByEmail(EMAIL);
+        inOrder.verify(tokens).findByUser(ANNA);
+        inOrder.verify(generator).newToken();
+        inOrder.verify(tokens).store(stored.capture());
+        inOrder.verify(mailer).send(eq(EMAIL), eq("Reset your password"), body.capture());
+        verifyNoMoreInteractions(users, tokens, generator, mailer);
+
+        assertThat(stored.getValue().tokenHash()).isNotEqualTo("raw-token");
+        assertThat(stored.getValue().expiresAt()).isEqualTo(NOW.plus(Duration.ofMinutes(30)));
+        assertThat(body.getValue()).contains("https://shop.example/reset?token=raw-token");
+    }
+
+    @Test
+    void a_user_with_three_outstanding_tokens_gets_no_new_token_and_no_mail() {
+        when(users.findByEmail(EMAIL)).thenReturn(Optional.of(USER));
+        when(tokens.findByUser(ANNA)).thenReturn(List.of(
+                tokenExpiringIn(Duration.ofMinutes(5)),
+                tokenExpiringIn(Duration.ofMinutes(10)),
+                tokenExpiringIn(Duration.ofMinutes(20))));
+
+        service.requestReset(EMAIL);
+
+        InOrder inOrder = inOrder(users, tokens);
+        inOrder.verify(users).findByEmail(EMAIL);
+        inOrder.verify(tokens).findByUser(ANNA);
+        verify(generator, never()).newToken();
+        verify(tokens, never()).store(any());
+        verifyNoInteractions(mailer, hasher);
+        verifyNoMoreInteractions(users, tokens, generator);
+    }
+
+    @Test
+    void a_valid_token_changes_the_password_and_deletes_all_tokens_of_the_user() {
+        ResetToken used = new ResetToken("used-hash", ANNA, NOW.plusSeconds(60));
+        ResetToken sibling = new ResetToken("sibling-hash", ANNA, NOW.plusSeconds(120));
+        when(tokens.findByTokenHash(anyString())).thenReturn(Optional.of(used));
+        when(users.findById(ANNA)).thenReturn(Optional.of(USER));
+        when(hasher.hash("correct horse battery")).thenReturn("new-hash");
+        when(tokens.findByUser(ANNA)).thenReturn(List.of(used, sibling));
+
+        ResetResult result = service.resetPassword("raw-token", "correct horse battery");
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        InOrder inOrder = inOrder(tokens, users, hasher);
+        inOrder.verify(tokens).findByTokenHash(anyString());
+        inOrder.verify(users).findById(ANNA);
+        inOrder.verify(hasher).hash("correct horse battery");
+        inOrder.verify(users).save(saved.capture());
+        inOrder.verify(tokens).findByUser(ANNA);
+        inOrder.verify(tokens).delete("used-hash");
+        inOrder.verify(tokens).delete("sibling-hash");
+        verifyNoMoreInteractions(users, tokens, hasher);
+
+        assertThat(result).isEqualTo(new PasswordChanged());
+        assertThat(saved.getValue().passwordHash()).isEqualTo("new-hash");
+    }
+
+    @Test
+    void an_expired_token_is_deleted_and_rejected() {
+        ResetToken expired = new ResetToken("expired-hash", ANNA, NOW);
+        when(tokens.findByTokenHash(anyString())).thenReturn(Optional.of(expired));
+
+        ResetResult result = service.resetPassword("raw-token", "correct horse battery");
+
+        // The service hashes the raw token itself, so the test captures the hash it looked up.
+        ArgumentCaptor<String> lookedUp = ArgumentCaptor.forClass(String.class);
+        verify(tokens).findByTokenHash(lookedUp.capture());
+        assertThat(result).isEqualTo(new ExpiredToken());
+        verify(tokens).delete(lookedUp.getValue());
+        verifyNoMoreInteractions(tokens);
+        verifyNoInteractions(users, hasher, mailer, generator);
+    }
+
+    @Test
+    void an_unknown_token_is_rejected_without_touching_users() {
+        when(tokens.findByTokenHash(anyString())).thenReturn(Optional.empty());
+
+        ResetResult result = service.resetPassword("guessed-token", "correct horse battery");
+
+        assertThat(result).isEqualTo(new InvalidToken());
+        verify(tokens).findByTokenHash(anyString());
+        verifyNoMoreInteractions(tokens);
+        verifyNoInteractions(users, hasher);
+    }
+
+    @Test
+    void a_weak_password_is_refused_and_the_token_is_kept() {
+        ResetToken valid = new ResetToken("valid-hash", ANNA, NOW.plusSeconds(60));
+        when(tokens.findByTokenHash(anyString())).thenReturn(Optional.of(valid));
+
+        ResetResult result = service.resetPassword("raw-token", "short");
+
+        assertThat(result).isEqualTo(new PasswordTooWeak("at least 12 characters"));
+        verify(tokens).findByTokenHash(anyString());
+        verifyNoMoreInteractions(tokens);
+        verifyNoInteractions(users, hasher);
+    }
+
+    private static ResetToken tokenExpiringIn(Duration lifetime) {
+        return new ResetToken("hash-" + lifetime.toMinutes(), ANNA, NOW.plus(lifetime));
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -208,24 +394,539 @@ This task differs from the others. The production code is complete, so the start
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task22/PasswordResetService.java -->
+**[`PasswordResetService.java`](../solutions/src/main/java/io/github/chris013/practice/task22/PasswordResetService.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * Lets a customer who forgot the password choose a new one, by email.
+ *
+ * <p>Rules this class enforces (the tests check each of them):
+ * <ul>
+ *   <li>an unknown email gets the same silent result as a known one, so nobody can probe which emails have accounts;</li>
+ *   <li>at most 3 unexpired tokens per user, so nobody can flood a mailbox;</li>
+ *   <li>only the SHA-256 hash of a token is stored, so a leaked store is useless to an attacker;</li>
+ *   <li>a token is valid for 30 minutes and works once;</li>
+ *   <li>a successful reset invalidates every other token of that user.</li>
+ * </ul>
+ */
+public final class PasswordResetService {
+
+    static final Duration TOKEN_LIFETIME = Duration.ofMinutes(30);
+    static final int MAX_OUTSTANDING_TOKENS = 3;
+    static final int MINIMUM_PASSWORD_LENGTH = 12;
+    static final String MAIL_SUBJECT = "Reset your password";
+    static final String RESET_LINK_PREFIX = "https://shop.example/reset?token=";
+
+    private static final long TOKEN_LIFETIME_MINUTES = TOKEN_LIFETIME.toMinutes();
+
+    private final UserRepository users;
+    private final ResetTokenStore tokens;
+    private final TokenGenerator generator;
+    private final PasswordHasher hasher;
+    private final Mailer mailer;
+    private final Clock clock;
+
+    public PasswordResetService(UserRepository users, ResetTokenStore tokens, TokenGenerator generator,
+            PasswordHasher hasher, Mailer mailer, Clock clock) {
+        this.users = Objects.requireNonNull(users, "users");
+        this.tokens = Objects.requireNonNull(tokens, "tokens");
+        this.generator = Objects.requireNonNull(generator, "generator");
+        this.hasher = Objects.requireNonNull(hasher, "hasher");
+        this.mailer = Objects.requireNonNull(mailer, "mailer");
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
+
+    /**
+     * Sends a reset link if the email belongs to an account and the rate limit allows it.
+     * Returns normally in every case except a mail-system failure, which propagates to the caller.
+     */
+    public void requestReset(EmailAddress email) {
+        Objects.requireNonNull(email, "email");
+        Optional<User> user = users.findByEmail(email);
+        if (user.isEmpty()) {
+            return;
+        }
+        UserId userId = user.get().id();
+        Instant now = clock.instant();
+        long outstanding = tokens.findByUser(userId).stream()
+                .filter(token -> !token.isExpiredAt(now))
+                .count();
+        if (outstanding >= MAX_OUTSTANDING_TOKENS) {
+            return;
+        }
+        String token = generator.newToken();
+        tokens.store(new ResetToken(Sha256.hex(token), userId, now.plus(TOKEN_LIFETIME)));
+        mailer.send(user.get().email(), MAIL_SUBJECT, messageBody(token));
+    }
+
+    /**
+     * Checks the token and, if it is valid and the password is acceptable, changes the password.
+     * The token is the secret from the mail link; we look it up by its hash.
+     */
+    public ResetResult resetPassword(String token, String newPassword) {
+        Objects.requireNonNull(token, "token");
+        Objects.requireNonNull(newPassword, "newPassword");
+        String tokenHash = Sha256.hex(token);
+        Optional<ResetToken> stored = tokens.findByTokenHash(tokenHash);
+        if (stored.isEmpty()) {
+            return new InvalidToken();
+        }
+        ResetToken resetToken = stored.get();
+        if (resetToken.isExpiredAt(clock.instant())) {
+            tokens.delete(tokenHash);
+            return new ExpiredToken();
+        }
+        // The token is not consumed here: a weak password is a typo, not a misuse.
+        if (newPassword.codePointCount(0, newPassword.length()) < MINIMUM_PASSWORD_LENGTH) {
+            return new PasswordTooWeak("at least " + MINIMUM_PASSWORD_LENGTH + " characters");
+        }
+        User user = users.findById(resetToken.userId()).orElseThrow(() -> new IllegalStateException(
+                "reset token refers to an unknown user " + resetToken.userId().value()));
+        users.save(new User(user.id(), user.email(), hasher.hash(newPassword)));
+        // Single use, and a changed password makes every other outstanding link useless too.
+        List<ResetToken> ownTokens = tokens.findByUser(user.id());
+        for (ResetToken own : ownTokens) {
+            tokens.delete(own.tokenHash());
+        }
+        return new PasswordChanged();
+    }
+
+    private static String messageBody(String token) {
+        return "Open this link to choose a new password: " + RESET_LINK_PREFIX + token
+                + "\n\nThe link expires in " + TOKEN_LIFETIME_MINUTES + " minutes.";
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task22/ResetToken.java -->
+**[`ResetToken.java`](../solutions/src/main/java/io/github/chris013/practice/task22/ResetToken.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import java.time.Instant;
+import java.util.Objects;
+
+/**
+ * A password reset token as it is stored: the SHA-256 hash of the token, never the token itself.
+ * If the store leaks, the attacker gets hashes they cannot use to reset anyone's password.
+ */
+public record ResetToken(String tokenHash, UserId userId, Instant expiresAt) {
+
+    public ResetToken {
+        Objects.requireNonNull(tokenHash, "tokenHash");
+        Objects.requireNonNull(userId, "userId");
+        Objects.requireNonNull(expiresAt, "expiresAt");
+    }
+
+    /** Expired from the moment {@code now} reaches {@code expiresAt}, not one tick later. */
+    public boolean isExpiredAt(Instant now) {
+        return !now.isBefore(expiresAt);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task22/Sha256PasswordHasher.java -->
+**[`Sha256PasswordHasher.java`](../solutions/src/main/java/io/github/chris013/practice/task22/Sha256PasswordHasher.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Objects;
+
+/**
+ * Hashes passwords with plain SHA-256.
+ *
+ * <p>For the exercise only; use bcrypt/argon2 in production. SHA-256 is fast on purpose, which
+ * is exactly what a password hash must not be: an attacker with the database can try billions of
+ * guesses per second. A real hasher is slow and salted.
+ */
+public final class Sha256PasswordHasher implements PasswordHasher {
+
+    @Override
+    public String hash(String raw) {
+        return Sha256.hex(Objects.requireNonNull(raw, "raw"));
+    }
+
+    @Override
+    public boolean matches(String raw, String hash) {
+        byte[] computed = hash(raw).getBytes(StandardCharsets.UTF_8);
+        byte[] expected = Objects.requireNonNull(hash, "hash").getBytes(StandardCharsets.UTF_8);
+        // Constant-time comparison, so the time taken does not reveal how many leading characters matched.
+        return MessageDigest.isEqual(computed, expected);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/PasswordResetServiceTest.java -->
+**[`PasswordResetServiceTest.java`](../solutions/src/test/java/io/github/chris013/practice/task22/PasswordResetServiceTest.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
+
+import io.github.chris013.practice.task22.RecordingMailer.SentMail;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/** State-based: we check what the users, the token store and the mailbox look like afterwards. */
+class PasswordResetServiceTest {
+
+    private static final EmailAddress EMAIL = new EmailAddress("anna@example.com");
+    private static final UserId ANNA = new UserId("anna");
+    private static final Instant NOW = Instant.parse("2026-11-09T10:00:00Z");
+    private static final Duration LIFETIME = Duration.ofMinutes(30);
+    private static final String OLD_PASSWORD = "old-password-123";
+    private static final String NEW_PASSWORD = "new-password-456";
+
+    private final InMemoryUsers users = new InMemoryUsers();
+    private final InMemoryResetTokens tokens = new InMemoryResetTokens();
+    private final RecordingMailer mailer = new RecordingMailer();
+    private final MutableClock clock = new MutableClock(NOW);
+    private final Sha256PasswordHasher hasher = new Sha256PasswordHasher();
+    private final AtomicInteger issued = new AtomicInteger();
+    private final PasswordResetService service = serviceWith(mailer);
+
+    @BeforeEach
+    void anna_has_an_account() {
+        users.save(new User(ANNA, EMAIL, hasher.hash(OLD_PASSWORD)));
+    }
+
+    /** A stub: every call hands out the next predictable token, so tests can name them. */
+    private String nextToken() {
+        return "token-" + issued.incrementAndGet();
+    }
+
+    private PasswordResetService serviceWith(Mailer mailerToUse) {
+        return new PasswordResetService(users, tokens, this::nextToken, hasher, mailerToUse, clock);
+    }
+
+    private void requestReset() {
+        service.requestReset(EMAIL);
+    }
+
+    private boolean passwordIs(String raw) {
+        return hasher.matches(raw, users.findById(ANNA).orElseThrow().passwordHash());
+    }
+
+    @Nested
+    class RequestingAReset {
+
+        @Test
+        void unknown_email_sends_nothing_and_stores_nothing() {
+            // Mockito is the clearer choice here, not the only one: verifyNoInteractions states "nothing was sent"
+            // in one line and keeps failing if Mailer later gains a second method. An empty recording-mailer
+            // list would prove the same today.
+            Mailer outbox = mock(Mailer.class);
+
+            serviceWith(outbox).requestReset(new EmailAddress("nobody@example.com"));
+
+            verifyNoInteractions(outbox);
+            assertThat(tokens.count()).isZero();
+        }
+
+        @Test
+        void mails_a_link_that_contains_the_token() {
+            requestReset();
+
+            assertThat(mailer.sent()).hasSize(1);
+            SentMail mail = mailer.sent().getFirst();
+            assertThat(mail.to()).isEqualTo(EMAIL);
+            assertThat(mail.subject()).isEqualTo("Reset your password");
+            assertThat(mail.body()).contains("https://shop.example/reset?token=token-1");
+        }
+
+        @Test
+        void stores_only_the_hash_of_the_token_with_a_30_minute_lifetime() {
+            requestReset();
+
+            ResetToken stored = tokens.findByUser(ANNA).getFirst();
+            // SHA-256 in lower-case hex: 64 characters, and the raw token is nowhere to be seen.
+            assertThat(stored.tokenHash()).matches("[0-9a-f]{64}").doesNotContain("token-1");
+            assertThat(stored.userId()).isEqualTo(ANNA);
+            assertThat(stored.expiresAt()).isEqualTo(NOW.plus(LIFETIME));
+        }
+
+        @Test
+        void a_fourth_request_is_ignored_while_three_tokens_are_outstanding() {
+            requestReset();
+            requestReset();
+            requestReset();
+
+            requestReset();
+
+            assertThat(mailer.sent()).hasSize(3);
+            assertThat(tokens.findByUser(ANNA)).hasSize(3);
+        }
+
+        @Test
+        void the_limit_still_holds_one_second_before_the_oldest_token_expires() {
+            requestReset();
+            requestReset();
+            requestReset();
+
+            clock.advanceBy(LIFETIME.minusSeconds(1));
+            requestReset();
+
+            assertThat(mailer.sent()).hasSize(3);
+        }
+
+        @Test
+        void a_new_token_is_allowed_again_once_the_old_ones_have_expired() {
+            requestReset();
+            requestReset();
+            requestReset();
+            clock.advanceBy(LIFETIME);
+
+            requestReset();
+
+            assertThat(mailer.sent()).hasSize(4);
+        }
+    }
+
+    @Nested
+    class Construction {
+
+        @Test
+        void refuses_null_collaborators() {
+            assertThatNullPointerException()
+                    .isThrownBy(() -> new PasswordResetService(
+                            null, tokens, PasswordResetServiceTest.this::nextToken, hasher, mailer, clock))
+                    .withMessage("users");
+        }
+    }
+
+    @Nested
+    class ResettingThePassword {
+
+        @BeforeEach
+        void request_a_token() {
+            requestReset();
+        }
+
+        @Test
+        void a_valid_token_changes_the_password() {
+            ResetResult result = service.resetPassword("token-1", NEW_PASSWORD);
+
+            assertThat(result).isEqualTo(new PasswordChanged());
+            assertThat(passwordIs(NEW_PASSWORD)).isTrue();
+            assertThat(passwordIs(OLD_PASSWORD)).isFalse();
+        }
+
+        @Test
+        void a_token_works_only_once() {
+            service.resetPassword("token-1", NEW_PASSWORD);
+
+            ResetResult second = service.resetPassword("token-1", "another-password-789");
+
+            assertThat(second).isEqualTo(new InvalidToken());
+            assertThat(passwordIs(NEW_PASSWORD)).isTrue();
+        }
+
+        @Test
+        void using_one_token_invalidates_the_other_outstanding_tokens() {
+            requestReset();
+
+            service.resetPassword("token-1", NEW_PASSWORD);
+
+            assertThat(service.resetPassword("token-2", "another-password-789")).isEqualTo(new InvalidToken());
+            assertThat(tokens.findByUser(ANNA)).isEmpty();
+        }
+
+        @Test
+        void a_token_is_still_valid_one_second_before_it_expires() {
+            clock.advanceBy(LIFETIME.minusSeconds(1));
+
+            assertThat(service.resetPassword("token-1", NEW_PASSWORD)).isEqualTo(new PasswordChanged());
+        }
+
+        @Test
+        void a_token_is_rejected_exactly_when_it_expires_and_is_removed() {
+            clock.advanceBy(LIFETIME);
+
+            assertThat(service.resetPassword("token-1", NEW_PASSWORD)).isEqualTo(new ExpiredToken());
+            assertThat(tokens.findByUser(ANNA)).isEmpty();
+            assertThat(passwordIs(OLD_PASSWORD)).isTrue();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"", "a", "elevenchars"})
+        void a_password_under_12_characters_is_refused_and_the_token_stays_valid(String weak) {
+            ResetResult result = service.resetPassword("token-1", weak);
+
+            assertThat(result).isEqualTo(new PasswordTooWeak("at least 12 characters"));
+            assertThat(service.resetPassword("token-1", NEW_PASSWORD)).isEqualTo(new PasswordChanged());
+        }
+
+        @Test
+        void exactly_12_characters_is_enough() {
+            assertThat(service.resetPassword("token-1", "twelve-chars")).isEqualTo(new PasswordChanged());
+        }
+
+        @Test
+        void an_unknown_token_is_rejected_and_changes_nothing() {
+            ResetResult result = service.resetPassword("guessed-token", NEW_PASSWORD);
+
+            assertThat(result).isEqualTo(new InvalidToken());
+            assertThat(passwordIs(OLD_PASSWORD)).isTrue();
+            assertThat(tokens.findByUser(ANNA)).hasSize(1);
+        }
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/InMemoryResetTokens.java -->
+**[`InMemoryResetTokens.java`](../solutions/src/test/java/io/github/chris013/practice/task22/InMemoryResetTokens.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+/** A fake token store that keeps tokens in a map keyed by hash, like the real table would. */
+final class InMemoryResetTokens implements ResetTokenStore {
+
+    private final Map<String, ResetToken> byHash = new LinkedHashMap<>();
+
+    @Override
+    public void store(ResetToken token) {
+        byHash.put(token.tokenHash(), token);
+    }
+
+    @Override
+    public Optional<ResetToken> findByTokenHash(String tokenHash) {
+        return Optional.ofNullable(byHash.get(tokenHash));
+    }
+
+    @Override
+    public void delete(String tokenHash) {
+        byHash.remove(tokenHash);
+    }
+
+    @Override
+    public List<ResetToken> findByUser(UserId userId) {
+        return byHash.values().stream().filter(token -> token.userId().equals(userId)).toList();
+    }
+
+    int count() {
+        return byHash.size();
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/RecordingMailer.java -->
+**[`RecordingMailer.java`](../solutions/src/test/java/io/github/chris013/practice/task22/RecordingMailer.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * A hand-written spy: it records every message, and the test reads the record afterwards.
+ * That is usually all a mailer needs. No Mockito required.
+ */
+final class RecordingMailer implements Mailer {
+
+    record SentMail(EmailAddress to, String subject, String body) {
+    }
+
+    private final List<SentMail> sent = new ArrayList<>();
+
+    @Override
+    public void send(EmailAddress to, String subject, String body) {
+        sent.add(new SentMail(to, subject, body));
+    }
+
+    List<SentMail> sent() {
+        return List.copyOf(sent);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/MailerFailureTest.java -->
+**[`MailerFailureTest.java`](../solutions/src/test/java/io/github/chris013/practice/task22/MailerFailureTest.java)**
+
+```java
+package io.github.chris013.practice.task22;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+/**
+ * Pins what happens when the mail system is down. The current behaviour is deliberate to discuss:
+ * the exception reaches the caller, and the token that was already stored stays in the store.
+ */
+@ExtendWith(MockitoExtension.class)
+class MailerFailureTest {
+
+    private static final EmailAddress EMAIL = new EmailAddress("anna@example.com");
+    private static final UserId ANNA = new UserId("anna");
+
+    @Mock
+    private Mailer mailer;
+
+    @Test
+    void a_failing_mailer_propagates_and_leaves_the_stored_token_behind() {
+        InMemoryUsers users = new InMemoryUsers();
+        InMemoryResetTokens tokens = new InMemoryResetTokens();
+        users.save(new User(ANNA, EMAIL, "some-hash"));
+        Clock clock = Clock.fixed(Instant.parse("2026-11-09T10:00:00Z"), ZoneOffset.UTC);
+        PasswordResetService service = new PasswordResetService(
+                users, tokens, () -> "token-1", new Sha256PasswordHasher(), mailer, clock);
+        // A throwing lambda would do the same. doThrow is shown because it is the Mockito form you will meet for void methods.
+        doThrow(new IllegalStateException("SMTP server is down")).when(mailer).send(any(), any(), any());
+
+        assertThatThrownBy(() -> service.requestReset(EMAIL))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("SMTP server is down");
+
+        // The user never got the mail, but the token exists and counts against the limit of 3 for 30 minutes.
+        assertThat(tokens.findByUser(ANNA)).hasSize(1);
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

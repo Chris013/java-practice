@@ -207,6 +207,93 @@ Before you write any production code, the given acceptance test should be red. I
 <summary>Show the tests</summary>
 
 <!-- embed: src/test/java/io/github/chris013/practice/task19/DeliveryDateAcceptanceTest.java -->
+**[`DeliveryDateAcceptanceTest.java`](../src/test/java/io/github/chris013/practice/task19/DeliveryDateAcceptanceTest.java)**
+
+```java
+package io.github.chris013.practice.task19;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import java.time.LocalDate;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+/**
+ * The outside-in "north star" for this task. It describes what the business needs, in business words.
+ * It stays red until the whole feature works. Do not try to make it green in one go: write the small unit tests
+ * from your test list first, and come back here when a piece is ready.
+ */
+class DeliveryDateAcceptanceTest {
+
+    @Test
+    void a_three_day_delivery_ordered_before_easter_skips_good_friday_and_easter_monday() {
+        // Thu 2 Apr 2026. Fri 3 Apr is Good Friday, Sat and Sun are the weekend, Mon 6 Apr is Easter Monday.
+        // Working days: Tue 7, Wed 8, Thu 9.
+        WorkingDayCalendar germany = WorkingDayCalendar.germany();
+
+        assertThat(germany.addWorkingDays(LocalDate.of(2026, 4, 2), 3)).isEqualTo(LocalDate.of(2026, 4, 9));
+    }
+
+    @Test
+    void whit_monday_pushes_a_one_day_delivery_to_tuesday() {
+        // Fri 22 May 2026 + 1 working day. Sat and Sun are skipped, and Mon 25 May is Whit Monday.
+        WorkingDayCalendar germany = WorkingDayCalendar.germany();
+
+        assertThat(germany.addWorkingDays(LocalDate.of(2026, 5, 22), 1)).isEqualTo(LocalDate.of(2026, 5, 26));
+    }
+
+    @Test
+    void corpus_christi_is_a_holiday_in_bavaria_but_not_in_berlin() {
+        // Corpus Christi 2026 is Thu 4 Jun. A parcel posted on Wed 3 Jun with one working day to go:
+        LocalDate posted = LocalDate.of(2026, 6, 3);
+
+        assertThat(WorkingDayCalendar.germany(GermanState.BERLIN).addWorkingDays(posted, 1))
+                .isEqualTo(LocalDate.of(2026, 6, 4));
+        assertThat(WorkingDayCalendar.germany(GermanState.BAVARIA).addWorkingDays(posted, 1))
+                .isEqualTo(LocalDate.of(2026, 6, 5));
+    }
+
+    @Test
+    void christmas_friday_and_boxing_day_saturday_leave_monday_as_the_next_working_day() {
+        // Thu 24 Dec 2026. Fri 25 Dec is Christmas Day, Sat 26 Dec is Boxing Day, Sun 27 Dec is a Sunday.
+        WorkingDayCalendar germany = WorkingDayCalendar.germany();
+
+        assertThat(germany.addWorkingDays(LocalDate.of(2026, 12, 24), 1)).isEqualTo(LocalDate.of(2026, 12, 28));
+    }
+
+    @Test
+    void a_holiday_on_a_weekend_does_not_reduce_the_working_days_of_the_week() {
+        // German Unity Day 2026 is Sat 3 Oct. Monday 28 Sep to Monday 5 Oct has exactly five working days.
+        WorkingDayCalendar germany = WorkingDayCalendar.germany();
+
+        assertThat(germany.workingDaysBetween(LocalDate.of(2026, 9, 28), LocalDate.of(2026, 10, 5))).isEqualTo(5);
+    }
+
+    @Test
+    void the_german_holidays_of_2026_are_listed_in_date_order() {
+        WorkingDayCalendar germany = WorkingDayCalendar.germany();
+
+        assertThat(germany.holidaysIn(2026)).containsExactly(
+                LocalDate.of(2026, 1, 1),
+                LocalDate.of(2026, 4, 3),
+                LocalDate.of(2026, 4, 6),
+                LocalDate.of(2026, 5, 1),
+                LocalDate.of(2026, 5, 14),
+                LocalDate.of(2026, 5, 25),
+                LocalDate.of(2026, 10, 3),
+                LocalDate.of(2026, 12, 25),
+                LocalDate.of(2026, 12, 26));
+    }
+
+    @Test
+    void berlin_has_254_working_days_in_2026() {
+        // 261 Monday-to-Friday days in 2026, minus 7 weekday holidays. Berlin's Women's Day (Sun 8 Mar) is on a weekend.
+        WorkingDayCalendar berlin = WorkingDayCalendar.germany(GermanState.BERLIN);
+
+        assertThat(berlin.workingDaysBetween(LocalDate.of(2026, 1, 1), LocalDate.of(2027, 1, 1))).isEqualTo(254);
+    }
+}
+```
 <!-- /embed -->
 
 </details>
@@ -254,15 +341,282 @@ Before you write any production code, the given acceptance test should be red. I
 ### Code
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task19/Easter.java -->
+**[`Easter.java`](../solutions/src/main/java/io/github/chris013/practice/task19/Easter.java)**
+
+```java
+package io.github.chris013.practice.task19;
+
+import java.time.LocalDate;
+
+/**
+ * Computes the date of Easter Sunday in the Gregorian calendar.
+ *
+ * <p>Uses the "Anonymous Gregorian algorithm" (Meeus, Jones and Butcher). It is pure integer arithmetic, so it
+ * is fast and needs no table of dates. The algorithm is only valid for the Gregorian calendar, which began in
+ * October 1582 in most of Europe; 1583 is the first full year of it.
+ */
+public final class Easter {
+
+    static final int FIRST_GREGORIAN_YEAR = 1583;
+
+    private Easter() {
+    }
+
+    /**
+     * @throws IllegalArgumentException if {@code year} is before 1583, when the Gregorian calendar was introduced
+     */
+    public static LocalDate sunday(int year) {
+        if (year < FIRST_GREGORIAN_YEAR) {
+            throw new IllegalArgumentException(
+                    "Easter is only computed for years from " + FIRST_GREGORIAN_YEAR + ", was " + year);
+        }
+        int a = year % 19;
+        int b = year / 100;
+        int c = year % 100;
+        int d = b / 4;
+        int e = b % 4;
+        int f = (b + 8) / 25;
+        int g = (b - f + 1) / 3;
+        int h = (19 * a + b - d - g + 15) % 30;
+        int i = c / 4;
+        int k = c % 4;
+        int l = (32 + 2 * e + 2 * i - h - k) % 7;
+        int m = (a + 11 * h + 22 * l) / 451;
+        int month = (h + l - 7 * m + 114) / 31;
+        int day = (h + l - 7 * m + 114) % 31 + 1;
+        return LocalDate.of(year, month, day);
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task19/FixedHoliday.java -->
+**[`FixedHoliday.java`](../solutions/src/main/java/io/github/chris013/practice/task19/FixedHoliday.java)**
+
+```java
+package io.github.chris013.practice.task19;
+
+import java.time.LocalDate;
+import java.time.MonthDay;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * A holiday on the same calendar day every year, such as 3 October.
+ */
+public record FixedHoliday(String name, MonthDay day) implements Holiday {
+
+    public FixedHoliday {
+        Objects.requireNonNull(name, "name");
+        Objects.requireNonNull(day, "day");
+    }
+
+    /** Empty for 29 February in a non-leap year: the holiday simply does not happen that year. */
+    @Override
+    public Optional<LocalDate> dateIn(int year) {
+        return day.isValidYear(year) ? Optional.of(day.atYear(year)) : Optional.empty();
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task19/EasterBasedHoliday.java -->
+**[`EasterBasedHoliday.java`](../solutions/src/main/java/io/github/chris013/practice/task19/EasterBasedHoliday.java)**
+
+```java
+package io.github.chris013.practice.task19;
+
+import java.time.LocalDate;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * A holiday defined as a number of days before or after Easter Sunday, such as Good Friday ({@code -2}).
+ * Such a holiday happens every year, so {@link #dateIn} is never empty.
+ */
+public record EasterBasedHoliday(String name, int daysAfterEasterSunday) implements Holiday {
+
+    public EasterBasedHoliday {
+        Objects.requireNonNull(name, "name");
+    }
+
+    @Override
+    public Optional<LocalDate> dateIn(int year) {
+        return Optional.of(Easter.sunday(year).plusDays(daysAfterEasterSunday));
+    }
+}
+```
 <!-- /embed -->
 
 <!-- embed: solutions/src/main/java/io/github/chris013/practice/task19/WorkingDayCalendar.java -->
+**[`WorkingDayCalendar.java`](../solutions/src/main/java/io/github/chris013/practice/task19/WorkingDayCalendar.java)**
+
+```java
+package io.github.chris013.practice.task19;
+
+import static java.time.DayOfWeek.SATURDAY;
+import static java.time.DayOfWeek.SUNDAY;
+
+import java.time.LocalDate;
+import java.time.MonthDay;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/**
+ * Working days for a German delivery company: Monday to Friday, minus public holidays.
+ *
+ * <p>Holidays are data, not code: each calendar holds an immutable list of {@link Holiday} rules, so two calendars
+ * never share state and the holiday rules can be read in one place. The holiday rules are fixed for the life of
+ * the object, so every method is a pure function of its arguments.
+ *
+ * <p>The calendar supports dates from 1 January 1583, the first full year of the Gregorian calendar. Every method
+ * throws {@code IllegalArgumentException} for an earlier date or year, because Easter, and with it several
+ * holidays, is undefined there.
+ */
+public final class WorkingDayCalendar {
+
+    private static final List<Holiday> NATIONAL = List.of(
+            new FixedHoliday("New Year's Day", MonthDay.of(1, 1)),
+            new EasterBasedHoliday("Good Friday", -2),
+            new EasterBasedHoliday("Easter Monday", 1),
+            new FixedHoliday("Labour Day", MonthDay.of(5, 1)),
+            new EasterBasedHoliday("Ascension Day", 39),
+            new EasterBasedHoliday("Whit Monday", 50),
+            new FixedHoliday("German Unity Day", MonthDay.of(10, 3)),
+            new FixedHoliday("Christmas Day", MonthDay.of(12, 25)),
+            new FixedHoliday("Boxing Day", MonthDay.of(12, 26)));
+
+    private final List<Holiday> holidays;
+
+    private WorkingDayCalendar(List<Holiday> holidays) {
+        this.holidays = List.copyOf(holidays);
+    }
+
+    /** A calendar with the nationwide German holidays only. */
+    public static WorkingDayCalendar germany() {
+        return new WorkingDayCalendar(NATIONAL);
+    }
+
+    /** The nationwide holidays plus the holidays of the given state. */
+    public static WorkingDayCalendar germany(GermanState state) {
+        Objects.requireNonNull(state, "state");
+        List<Holiday> all = new ArrayList<>(NATIONAL);
+        all.addAll(stateHolidays(state));
+        return new WorkingDayCalendar(all);
+    }
+
+    /**
+     * The switch has no default branch on purpose: if someone adds a state to {@link GermanState} and forgets
+     * its holidays, the compiler stops the build instead of silently giving that state no state holidays.
+     */
+    private static List<Holiday> stateHolidays(GermanState state) {
+        return switch (state) {
+            case BAVARIA -> List.of(
+                    new FixedHoliday("Epiphany", MonthDay.of(1, 6)),
+                    new EasterBasedHoliday("Corpus Christi", 60),
+                    new FixedHoliday("All Saints' Day", MonthDay.of(11, 1)),
+                    new FixedHoliday("Assumption Day", MonthDay.of(8, 15)));
+            case BERLIN -> List.of(
+                    new FixedHoliday("International Women's Day", MonthDay.of(3, 8)));
+            case NORTH_RHINE_WESTPHALIA -> List.of(
+                    new EasterBasedHoliday("Corpus Christi", 60),
+                    new FixedHoliday("All Saints' Day", MonthDay.of(11, 1)));
+        };
+    }
+
+    private static void requireSupportedYear(int year) {
+        if (year < Easter.FIRST_GREGORIAN_YEAR) {
+            throw new IllegalArgumentException(
+                    "Only years from " + Easter.FIRST_GREGORIAN_YEAR + " are supported, was " + year);
+        }
+    }
+
+    private static void requireSupported(LocalDate date, String name) {
+        Objects.requireNonNull(date, name);
+        requireSupportedYear(date.getYear());
+    }
+
+    /** True if the date is a Monday to Friday and not a holiday in this calendar. */
+    public boolean isWorkingDay(LocalDate date) {
+        requireSupported(date, "date");
+        boolean weekend = date.getDayOfWeek() == SATURDAY || date.getDayOfWeek() == SUNDAY;
+        return !weekend && holidayOn(date).isEmpty();
+    }
+
+    /** The name of the holiday on this date, or empty. A holiday on a Saturday or Sunday still has a name. */
+    public Optional<String> holidayOn(LocalDate date) {
+        requireSupported(date, "date");
+        return holidays.stream()
+                .filter(holiday -> holiday.dateIn(date.getYear()).filter(date::equals).isPresent())
+                .map(Holiday::name)
+                .findFirst();
+    }
+
+    /**
+     * The date reached after {@code days} working days. Working days are counted after {@code start}.
+     * With {@code days == 0} the result is {@code start} if it is a working day, otherwise the next working day.
+     *
+     * @throws IllegalArgumentException if {@code days} is negative
+     */
+    public LocalDate addWorkingDays(LocalDate start, int days) {
+        requireSupported(start, "start");
+        if (days < 0) {
+            throw new IllegalArgumentException("days must not be negative, was " + days);
+        }
+        LocalDate date = start;
+        if (days == 0) {
+            while (!isWorkingDay(date)) {
+                date = date.plusDays(1);
+            }
+            return date;
+        }
+        // Walk forward one day at a time. The loop ends: a working day comes at least every few days, and
+        // LocalDate throws DateTimeException at the end of its range instead of wrapping around.
+        int counted = 0;
+        while (counted < days) {
+            date = date.plusDays(1);
+            if (isWorkingDay(date)) {
+                counted++;
+            }
+        }
+        return date;
+    }
+
+    /**
+     * The number of working days in {@code [startInclusive, endExclusive)}.
+     *
+     * @throws IllegalArgumentException if {@code endExclusive} is before {@code startInclusive}
+     */
+    public long workingDaysBetween(LocalDate startInclusive, LocalDate endExclusive) {
+        Objects.requireNonNull(startInclusive, "startInclusive");
+        Objects.requireNonNull(endExclusive, "endExclusive");
+        requireSupportedYear(startInclusive.getYear());
+        if (endExclusive.isBefore(startInclusive)) {
+            throw new IllegalArgumentException("end " + endExclusive + " is before start " + startInclusive);
+        }
+        long count = 0;
+        for (LocalDate date = startInclusive; date.isBefore(endExclusive); date = date.plusDays(1)) {
+            if (isWorkingDay(date)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /** All holiday dates in the year, in date order, including those that fall on a weekend. */
+    public List<LocalDate> holidaysIn(int year) {
+        requireSupportedYear(year);
+        return holidays.stream()
+                .map(holiday -> holiday.dateIn(year))
+                .flatMap(Optional::stream)
+                .distinct()
+                .sorted()
+                .toList();
+    }
+}
+```
 <!-- /embed -->
 
 The unit tests, in the order a TDD session produces them. They are a second reference, not the only right answer. The order of the nested classes is the order of the test list:
@@ -277,6 +631,331 @@ The unit tests, in the order a TDD session produces them. They are a second refe
 
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task19/WorkingDayCalendarTest.java -->
+**[`WorkingDayCalendarTest.java`](../solutions/src/test/java/io/github/chris013/practice/task19/WorkingDayCalendarTest.java)**
+
+```java
+package io.github.chris013.practice.task19;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.time.LocalDate;
+import java.time.MonthDay;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/**
+ * The unit tests a TDD session produces, in the order they were written. Nested class names avoid the production
+ * type names on purpose, so that {@code Easter} and {@code FixedHoliday} keep meaning the production classes.
+ */
+class WorkingDayCalendarTest {
+
+    private static final WorkingDayCalendar GERMANY = WorkingDayCalendar.germany();
+
+    @Nested
+    class WeekdaysAndWeekends {
+
+        @ParameterizedTest
+        @ValueSource(strings = {"2026-03-02", "2026-03-03", "2026-03-04", "2026-03-05", "2026-03-06"})
+        void monday_to_friday_are_working_days(String date) {
+            assertThat(GERMANY.isWorkingDay(LocalDate.parse(date))).isTrue();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"2026-03-07", "2026-03-08"})
+        void saturday_and_sunday_are_not_working_days(String date) {
+            assertThat(GERMANY.isWorkingDay(LocalDate.parse(date))).isFalse();
+        }
+    }
+
+    @Nested
+    class FixedDates {
+
+        @Test
+        void a_fixed_holiday_falls_on_the_same_day_every_year() {
+            Holiday labourDay = new FixedHoliday("Labour Day", MonthDay.of(5, 1));
+
+            assertThat(labourDay.dateIn(2026)).contains(LocalDate.of(2026, 5, 1));
+            assertThat(labourDay.dateIn(2027)).contains(LocalDate.of(2027, 5, 1));
+        }
+
+        @Test
+        void twenty_ninth_february_does_not_happen_in_a_non_leap_year() {
+            Holiday leapDay = new FixedHoliday("Leap Day", MonthDay.of(2, 29));
+
+            assertThat(leapDay.dateIn(2027)).isEmpty();
+            assertThat(leapDay.dateIn(2028)).contains(LocalDate.of(2028, 2, 29));
+        }
+
+        @Test
+        void rejects_a_missing_name_or_day() {
+            assertThatThrownBy(() -> new FixedHoliday(null, MonthDay.of(1, 1)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new FixedHoliday("New Year's Day", null))
+                    .isInstanceOf(NullPointerException.class);
+        }
+    }
+
+    @Nested
+    class EasterSunday {
+
+        // Triangulation: one year can be a lucky constant. Several years from different centuries and
+        // different positions in the 19-year cycle force a real computation.
+        @ParameterizedTest
+        @CsvSource({
+            "2000, 2000-04-23",
+            "2024, 2024-03-31",
+            "2025, 2025-04-20",
+            "2008, 2008-03-23",
+            "2026, 2026-04-05",
+            "2027, 2027-03-28",
+            "2038, 2038-04-25",
+            "1818, 1818-03-22",
+            "2285, 2285-03-22",
+            "1583, 1583-04-10"
+        })
+        void computes_easter_sunday_for_known_years(int year, String expected) {
+            assertThat(Easter.sunday(year)).isEqualTo(LocalDate.parse(expected));
+        }
+
+        @Test
+        void rejects_years_before_the_gregorian_calendar() {
+            assertThatThrownBy(() -> Easter.sunday(1582)).isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class EasterOffsets {
+
+        @ParameterizedTest
+        @CsvSource({
+            "-2, 2026-04-03",
+            "1, 2026-04-06",
+            "39, 2026-05-14",
+            "50, 2026-05-25",
+            "60, 2026-06-04"
+        })
+        void counts_days_from_easter_sunday(int offset, String expected) {
+            assertThat(new EasterBasedHoliday("Test", offset).dateIn(2026)).contains(LocalDate.parse(expected));
+        }
+    }
+
+    @Nested
+    class NationalHolidays {
+
+        @ParameterizedTest
+        @CsvSource({
+            "2026-01-01, New Year's Day",
+            "2026-04-03, Good Friday",
+            "2026-04-06, Easter Monday",
+            "2026-05-01, Labour Day",
+            "2026-05-14, Ascension Day",
+            "2026-05-25, Whit Monday",
+            "2026-10-03, German Unity Day",
+            "2026-12-25, Christmas Day",
+            "2026-12-26, Boxing Day"
+        })
+        void names_each_national_holiday(String date, String name) {
+            assertThat(GERMANY.holidayOn(LocalDate.parse(date))).contains(name);
+        }
+
+        @Test
+        void a_holiday_on_a_weekend_is_still_named_but_is_not_a_working_day() {
+            LocalDate unityDay = LocalDate.of(2026, 10, 3); // a Saturday
+
+            assertThat(GERMANY.holidayOn(unityDay)).contains("German Unity Day");
+            assertThat(GERMANY.isWorkingDay(unityDay)).isFalse();
+        }
+
+        @Test
+        void a_date_with_two_holidays_is_named_by_the_first_one_in_calendar_order() {
+            // In 2008 Ascension Day and Labour Day are both 1 May. National holidays come first in the list.
+            assertThat(GERMANY.holidayOn(LocalDate.of(2008, 5, 1))).contains("Labour Day");
+        }
+
+        @Test
+        void an_ordinary_weekday_has_no_holiday_name() {
+            assertThat(GERMANY.holidayOn(LocalDate.of(2026, 3, 4))).isEmpty();
+        }
+    }
+
+    @Nested
+    class StateHolidays {
+
+        @ParameterizedTest
+        @EnumSource(GermanState.class)
+        void every_state_has_the_national_holidays(GermanState state) {
+            assertThat(WorkingDayCalendar.germany(state).holidayOn(LocalDate.of(2026, 5, 14)))
+                    .contains("Ascension Day");
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "BAVARIA, 2026-01-06, Epiphany",
+            "BAVARIA, 2026-08-15, Assumption Day",
+            "BAVARIA, 2026-11-01, All Saints' Day",
+            "BERLIN, 2026-03-08, International Women's Day",
+            "NORTH_RHINE_WESTPHALIA, 2026-11-01, All Saints' Day"
+        })
+        void names_the_holidays_of_each_state(GermanState state, String date, String name) {
+            assertThat(WorkingDayCalendar.germany(state).holidayOn(LocalDate.parse(date))).contains(name);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"BAVARIA, true", "NORTH_RHINE_WESTPHALIA, true", "BERLIN, false"})
+        void corpus_christi_is_a_holiday_only_in_the_states_that_observe_it(GermanState state, boolean holiday) {
+            LocalDate corpusChristi2026 = LocalDate.of(2026, 6, 4);
+
+            assertThat(WorkingDayCalendar.germany(state).holidayOn(corpusChristi2026).isPresent()).isEqualTo(holiday);
+        }
+
+        @Test
+        void a_state_holiday_is_not_a_holiday_in_the_national_calendar() {
+            assertThat(GERMANY.isWorkingDay(LocalDate.of(2026, 1, 6))).isTrue();
+            assertThat(WorkingDayCalendar.germany(GermanState.BAVARIA).isWorkingDay(LocalDate.of(2026, 1, 6))).isFalse();
+        }
+    }
+
+    @Nested
+    class AddingWorkingDays {
+
+        @ParameterizedTest
+        @CsvSource({
+            "2026-03-02, 1, 2026-03-03",
+            "2026-03-06, 1, 2026-03-09",
+            "2026-03-06, 5, 2026-03-13",
+            "2026-03-07, 1, 2026-03-09",
+            "2026-04-02, 1, 2026-04-07",
+            "2026-04-02, 3, 2026-04-09",
+            "2025-12-31, 1, 2026-01-02"
+        })
+        void moves_forward_by_working_days_only(String start, int days, String expected) {
+            assertThat(GERMANY.addWorkingDays(LocalDate.parse(start), days)).isEqualTo(LocalDate.parse(expected));
+        }
+
+        @Test
+        void zero_days_returns_a_working_day_unchanged() {
+            assertThat(GERMANY.addWorkingDays(LocalDate.of(2026, 3, 4), 0)).isEqualTo(LocalDate.of(2026, 3, 4));
+        }
+
+        @ParameterizedTest
+        @CsvSource({
+            "2026-03-07, 2026-03-09",
+            "2026-12-25, 2026-12-28"
+        })
+        void zero_days_on_a_non_working_day_returns_the_next_working_day(String start, String expected) {
+            assertThat(GERMANY.addWorkingDays(LocalDate.parse(start), 0)).isEqualTo(LocalDate.parse(expected));
+        }
+
+        @Test
+        void rejects_negative_days() {
+            assertThatThrownBy(() -> GERMANY.addWorkingDays(LocalDate.of(2026, 3, 4), -1))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
+
+    @Nested
+    class CountingWorkingDays {
+
+        @Test
+        void excludes_the_end_date() {
+            assertThat(GERMANY.workingDaysBetween(LocalDate.of(2026, 3, 2), LocalDate.of(2026, 3, 3))).isEqualTo(1);
+        }
+
+        @Test
+        void counts_a_full_week_as_five_working_days() {
+            assertThat(GERMANY.workingDaysBetween(LocalDate.of(2026, 3, 2), LocalDate.of(2026, 3, 9))).isEqualTo(5);
+        }
+
+        @Test
+        void returns_zero_for_an_empty_range() {
+            assertThat(GERMANY.workingDaysBetween(LocalDate.of(2026, 3, 2), LocalDate.of(2026, 3, 2))).isZero();
+        }
+
+        @Test
+        void skips_good_friday_and_easter_monday() {
+            // Mon 30 Mar to Tue 7 Apr: Mon, Tue, Wed, Thu count; Good Friday, weekend and Easter Monday do not.
+            assertThat(GERMANY.workingDaysBetween(LocalDate.of(2026, 3, 30), LocalDate.of(2026, 4, 7))).isEqualTo(4);
+        }
+
+        @Test
+        void rejects_an_end_before_the_start() {
+            assertThatThrownBy(() -> GERMANY.workingDaysBetween(LocalDate.of(2026, 3, 9), LocalDate.of(2026, 3, 2)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @ParameterizedTest
+        @CsvSource({"BAVARIA, 252", "BERLIN, 254", "NORTH_RHINE_WESTPHALIA, 253"})
+        void counts_a_whole_year_per_state(GermanState state, long expected) {
+            assertThat(WorkingDayCalendar.germany(state)
+                    .workingDaysBetween(LocalDate.of(2026, 1, 1), LocalDate.of(2027, 1, 1))).isEqualTo(expected);
+        }
+    }
+
+    @Nested
+    class HolidaysInYear {
+
+        @ParameterizedTest
+        @CsvSource({"BAVARIA, 13", "BERLIN, 10", "NORTH_RHINE_WESTPHALIA, 11"})
+        void lists_every_holiday_of_the_year_once(GermanState state, int expected) {
+            assertThat(WorkingDayCalendar.germany(state).holidaysIn(2026)).hasSize(expected).doesNotHaveDuplicates();
+        }
+
+        @Test
+        void lists_a_date_once_when_two_holidays_fall_on_it() {
+            // Easter 2008 was 23 March, so Ascension Day (+39) fell on Labour Day, 1 May.
+            assertThat(GERMANY.holidaysIn(2008)).hasSize(8).containsOnlyOnce(LocalDate.of(2008, 5, 1));
+        }
+
+        @Test
+        void lists_holidays_in_date_order_including_those_on_weekends() {
+            assertThat(GERMANY.holidaysIn(2026)).hasSize(9).isSorted().contains(LocalDate.of(2026, 10, 3));
+        }
+    }
+
+    @Nested
+    class ArgumentChecks {
+
+        @Test
+        void rejects_null_arguments() {
+            assertThatThrownBy(() -> GERMANY.isWorkingDay(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> GERMANY.holidayOn(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> GERMANY.addWorkingDays(null, 1)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> WorkingDayCalendar.germany(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> GERMANY.workingDaysBetween(null, LocalDate.of(2026, 3, 9)))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> GERMANY.workingDaysBetween(LocalDate.of(2026, 3, 2), null))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new EasterBasedHoliday(null, 1)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void rejects_every_date_before_1583() {
+            LocalDate newYear1500 = LocalDate.of(1500, 1, 1);  // matches New Year's Day
+            LocalDate saturday1500 = LocalDate.of(1500, 1, 6); // a weekend day
+            LocalDate lastDayBefore = LocalDate.of(1582, 12, 31);
+            assertThatThrownBy(() -> GERMANY.isWorkingDay(newYear1500)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.isWorkingDay(saturday1500)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.holidayOn(newYear1500)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.holidaysIn(1582)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.addWorkingDays(lastDayBefore, 1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.workingDaysBetween(lastDayBefore, lastDayBefore))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void accepts_the_first_day_of_1583() {
+            assertThat(GERMANY.holidayOn(LocalDate.of(1583, 1, 1))).contains("New Year's Day");
+            assertThat(GERMANY.holidaysIn(1583)).hasSize(9); // Easter 1583 was 10 April: no collisions
+        }
+    }
+}
+```
 <!-- /embed -->
 
 ### What I typically flag in first attempts

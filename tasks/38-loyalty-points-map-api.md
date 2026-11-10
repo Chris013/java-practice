@@ -116,7 +116,7 @@ Validation: every method that takes a member name rejects a null name with `Null
 * **`redeem` has to decide before it writes.** Throwing from inside a remapping function is legal, and the map stays unchanged when it happens, but a plain check first reads better: read the balance, check it, then write. The write is still a single `computeIfPresent` call.
 * **`removeIf` works on views.** `balances.values().removeIf(...)` removes the matching entries from the map itself. Do not copy the map first.
 * **`replaceAll` is not all-or-nothing.** If the function throws halfway, the entries already visited have changed and the rest have not. So check the risky case *before* you call it. Think about which balance produces the largest bonus. This is the kind of detail that separates a correct method from one that is correct on the happy path.
-* **Three kinds of "immutable".** `List.of` and `Map.copyOf` build a new immutable collection that does not change when its source changes. `Collections.unmodifiableMap(m)` is a *view*: a read-only window onto `m`, so changes to `m` show through. `Arrays.asList` is a third kind: fixed size, but `set` works. `CollectionFactoriesTest` shows each one. Pick the one whose behaviour you want to promise to callers. For `snapshot()` that is a copy. For `membersByTier()` it is a view over a map you never let escape, which is also fine.
+* **Three kinds of "immutable".** `List.of` and `Map.copyOf` build a new immutable collection that does not change when its source changes. `Collections.unmodifiableMap(m)` is a *view*: a read-only window onto `m`, so changes to `m` show through. `Arrays.asList` is a third kind: fixed size, but `set` works. `Map.copyOf` and `List.copyOf` return their argument unchanged when it is already an immutable collection from the factories, so that copy is free; copying only costs something for a mutable source such as the ledger's `HashMap`. `CollectionFactoriesTest` shows each one. Pick the one whose behaviour you want to promise to callers. For `snapshot()` that is a copy. For `membersByTier()` it is a view over a map you never let escape, which is also fine.
 * **`EnumMap` for enum keys.** It is an array indexed by ordinal under the hood. It is smaller and faster than a `HashMap`, and iterates in declaration order, which is the order you want for tiers in a report. *Effective Java* Item 37 explains why using `ordinal()` yourself is worse.
 * **Floating point is not an option for points.** Do the bonus in integers. If you find yourself writing `balance * 0.1`, stop and read the Flag table.
 
@@ -166,7 +166,7 @@ Three test classes:
 
 ### Key decisions
 
-**1. `merge` with a lambda for `earn`, not `Integer::sum`.** `Integer::sum` silently wraps around on overflow. The lambda calls `Math.addExact`, so an overflow throws and leaves the old balance in place. `HashMap` only writes the result after the remapping function returns, so the exception means no write.
+**1. `merge` with `Math::addExact` for `earn`, not `Integer::sum`.** `Integer::sum` silently wraps around on overflow. `Math::addExact` has the same shape but throws, so an overflow leaves the old balance in place. `HashMap` only writes the result after the remapping function returns, so the exception means no write.
 
 **2. `getOrDefault` for reads, never `computeIfAbsent`.** `balance` must not create entries. `computeIfAbsent` on a read would add every name anyone ever asked about, and the dead-member problem would come back through the back door.
 
@@ -176,7 +176,7 @@ Three test classes:
 
 **5. `membersByTier` sorts with a `TreeMap` copy and fills an `EnumMap`.** Iterating a sorted copy means each list is sorted as it fills, with no extra sort step. The `EnumMap` gives enum order. At the end `replaceAll` makes each list immutable, and `Collections.unmodifiableMap` wraps the map. The `EnumMap` itself never leaves the method.
 
-**6. `snapshot` is `Map.copyOf`.** It copies, so later changes do not leak in, and its result rejects writes. Null keys or values would throw, but the ledger never stores them.
+**6. `snapshot` is `Map.copyOf`.** It copies, so later changes do not leak in, and its result rejects writes. Null keys or values would throw, but the ledger never stores them. Calling `Map.copyOf` again on the snapshot would cost nothing: it returns the same instance.
 
 ### Code
 

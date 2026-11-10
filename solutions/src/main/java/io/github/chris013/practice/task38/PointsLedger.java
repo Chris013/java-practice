@@ -36,7 +36,7 @@ public final class PointsLedger {
         requirePositive(points, "points");
         // merge calls the remapping function only when the key is present. If addExact throws,
         // HashMap leaves the old mapping in place, so the balance is unchanged.
-        balances.merge(name, points, (current, added) -> Math.addExact(current, added));
+        balances.merge(name, points, Math::addExact);
     }
 
     /** Returns the balance of a member, or 0 for a name the ledger does not know. */
@@ -53,7 +53,7 @@ public final class PointsLedger {
     public void redeem(String member, int points) {
         String name = normalise(member);
         requirePositive(points, "points");
-        int available = balance(name);
+        int available = balances.getOrDefault(name, 0);
         if (available < points) {
             throw new InsufficientPointsException(name, available, points);
         }

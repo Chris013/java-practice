@@ -17,6 +17,34 @@ class PointsLedgerTest {
     private final PointsLedger ledger = new PointsLedger();
 
     @Nested
+    class NameValidation {
+
+        @ParameterizedTest
+        @ValueSource(strings = {"", "   "})
+        void every_method_rejects_a_blank_name(String blank) {
+            assertThatThrownBy(() -> ledger.balance(blank)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> ledger.isMember(blank)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> ledger.redeem(blank, 1)).isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void every_method_rejects_a_null_name() {
+            assertThatThrownBy(() -> ledger.balance(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> ledger.isMember(null)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> ledger.redeem(null, 1)).isInstanceOf(NullPointerException.class);
+        }
+
+        @Test
+        void redeem_trims_the_name() {
+            ledger.earn("anna", 50);
+
+            ledger.redeem("  anna ", 20);
+
+            assertThat(ledger.balance("anna")).isEqualTo(30);
+        }
+    }
+
+    @Nested
     class Earn {
 
         @Test

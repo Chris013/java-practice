@@ -22,6 +22,13 @@ class CollectionFactoriesTest {
     class ImmutableFactories {
 
         @Test
+        void map_copy_of_returns_the_same_instance_when_the_map_is_already_immutable() {
+            Map<String, Integer> copy = Map.copyOf(new HashMap<>(Map.of("anna", 1)));
+
+            assertThat(Map.copyOf(copy)).isSameAs(copy);
+        }
+
+        @Test
         void list_of_rejects_null_elements() {
             assertThatThrownBy(() -> List.of("anna", null)).isInstanceOf(NullPointerException.class);
         }

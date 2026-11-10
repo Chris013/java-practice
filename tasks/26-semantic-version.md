@@ -13,7 +13,7 @@
 Our internal plugin marketplace stores every plugin version as a string and sorts the list with `String.compareTo`. That gives two bad results:
 
 * `1.10.0` sorts **before** `1.9.0`, because `"1.1"` is less than `"1.9"` character by character.
-* `2.0.0-rc.1` counts as **newer** than `2.0.0`, because `"-"` and `"."` happen to sort after the digits that come before them in the string.
+* `2.0.0-rc.1` counts as **newer** than `2.0.0`, because `"2.0.0"` is a prefix of `"2.0.0-rc.1"`, and `String.compareTo` ranks a shorter prefix lower.
 
 The "update to latest" button picked release candidates, and customers ended up with pre-release plugins installed. That is the bug.
 
@@ -85,7 +85,7 @@ Implement [`SemanticVersion`](../src/main/java/io/github/chris013/practice/task2
    * optional `-` followed by dot-separated pre-release identifiers. Each identifier is non-empty and made of `[0-9A-Za-z-]`. A purely numeric identifier has no leading zeros;
    * optional `+` followed by dot-separated build identifiers. Same character rules, leading zeros allowed.
    * No `v` prefix, no whitespace.
-2. **Errors** for bad text are an `IllegalArgumentException` whose message contains the input in single quotes and says what is wrong, for example `invalid version '01.2.3': leading zero in major`. `null` gives a `NullPointerException`.
+2. **Errors** for bad text are an `IllegalArgumentException` whose message contains the input in single quotes and says what is wrong, for example `invalid version '01.2.3': leading zero in major`. The tests check these fragments of the message: `version is empty`, `expected three numbers`, `invalid character 'v' in major`, `leading zero in major`, `invalid character ' ' in major`, `empty pre-release identifier`, `leading zero in pre-release identifier '01'`, `empty build identifier`, `invalid character '$' in pre-release identifier` and `major is too large`. `null` gives a `NullPointerException`.
 3. **Construction.** The record's compact constructor rejects negative numbers (`IllegalArgumentException`), applies the same identifier rules to the lists, and copies both lists with `List.copyOf`. `of(major, minor, patch)` creates a version without pre-release or build.
 4. **`toString`** returns the canonical text, so `parse(v.toString())` equals `v`.
 5. **`compareTo`** follows SemVer §11 and then uses build metadata as the last tie-breaker, so that it returns zero **only** for equal versions:
@@ -119,7 +119,7 @@ Implement [`SemanticVersion`](../src/main/java/io/github/chris013/practice/task2
 ## Constraints & non-goals
 
 * Plain Java 25, no libraries in the main code. Both classes are immutable.
-* No regular expression for the whole version. A regular expression exists on semver.org, and you may read it. Our parser splits the text instead, so the error can name the exact part that is wrong.
+* You may use the semver.org regular expression, but we recommend splitting the text so the error can name the exact part that is wrong.
 * **No OR-ranges** (`^1.2 || ^2.0`), **no partial versions** (`^1.2`) and **no `maxSatisfying`** in this task. They are stretch goals.
 * `nextX()` may throw `ArithmeticException` when the number would not fit an `int`. It does not need its own exception type.
 * `VersionRange` does not need `equals` or `hashCode`.
@@ -127,9 +127,9 @@ Implement [`SemanticVersion`](../src/main/java/io/github/chris013/practice/task2
 ## How I'd approach it
 
 * **Write the parser first, and have it fail with specific messages.** Split the text at `+`, then at the first `-`, then the core at `.`. Each step can report exactly what is wrong. The list of identifiers can be checked in the record's constructor, which means `parse` and `new SemanticVersion(...)` share one set of rules.
-* **Compare with composition, not with subtraction.** `Comparator.comparingInt(SemanticVersion::major).thenComparingInt(SemanticVersion::minor)…` says what it does. In `compareTo`, do not write `return major - other.major;`. That is correct here only because we forbid negative numbers. It breaks as soon as someone relaxes that rule, and *Effective Java* Item 14 explains why `Integer.compare` is the habit to build.
+* **Compare with composition, not with subtraction.** `Comparator.comparingInt(SemanticVersion::major).thenComparingInt(SemanticVersion::minor)…` says what it does. In `compareTo`, do not write `return major - other.major;`. That is correct here only because we forbid negative numbers. The real problem is overflow: `a - b` wraps around when the operands are large and of opposite sign. For example, `Integer.MIN_VALUE - 1` is `Integer.MAX_VALUE`, a large positive number, so the sign is wrong. *Effective Java* Item 14 explains why `Integer.compare` is the habit to build.
 * **Compare numeric identifiers without parsing them.** A numeric identifier has no leading zeros, so a longer one is always the bigger one. Compare the lengths first, then the characters. This works even for a 30-digit identifier, which would not fit in any Java number type.
-* **Make `compareTo` and `equals` agree.** Precedence ignores build metadata, so `compareTo` must add build metadata as the last step. Then zero means "the same version", and `equals` on the record (which compares all five components) agrees with it.
+* **Make `compareTo` and `equals` agree.** Precedence ignores build metadata, so `compareTo` must add build metadata as the last step. Then zero means "the same version", and `equals` on the record (which compares all five components) agrees with it. "Consistent with equals" means `compareTo` returns zero exactly when `equals` returns true. The classic counterexample is `BigDecimal`: `new BigDecimal("1.0")` and `new BigDecimal("1.00")` are not `equals`, because the scale differs, so a `HashSet` keeps both. Their `compareTo` is 0, so a `TreeSet` keeps only one. `precedence()` breaks the same way: `1.0.0+a` and `1.0.0+b` compare as equal, so `new TreeSet<>(precedence())` keeps only one of them. A `TreeSet` decides "same element" with `compare` or `compareTo` and never calls `equals`, so `add` returns `false` for a version that is not `equals` to the one already stored. That breaks the `Set` contract, which is defined in terms of `equals`.
 * **Keep `precedence()` as a second, deliberately weaker comparator.** Read its Javadoc. It is correct for sorting for display, for `max`, and for range checks. It is wrong for a `TreeSet`, as the tests show.
 * **The range check is a list of bounds.** A `VersionRange` can hold a list of small "operator plus version" pairs, all of which must hold. Caret and tilde are just a helper that writes those pairs for you. The pre-release rule is one extra check before the bounds are tested.
 * **Caret is the one with a table to get right.** Work out the upper bound for each case before you write code:
@@ -178,7 +178,7 @@ The test classes:
 
 - [ ] `mvn test -Dtest='**/task26/**'` is green.
 - [ ] `compareTo` returns zero only for versions that are `equals`. You can explain why build metadata is the last tie-breaker.
-- [ ] No subtraction in any comparison, and no regular expression that hides the reason for a parse error.
+- [ ] No subtraction in any comparison, and every parse error says which part is wrong.
 - [ ] Precedence is never used as a key of a `TreeSet` or `TreeMap` in the code you wrote.
 - [ ] Both classes are immutable, and the lists are copied.
 - [ ] Your PR description says why `^0.2.3` does not include `0.3.0`, using the rule and not a table.

@@ -37,18 +37,16 @@ class SemanticVersionParsingTest {
             assertThat(SemanticVersion.parse(text)).hasToString(text);
         }
 
-        @ParameterizedTest
-        @CsvSource({
-            "1.2.3",
-            "1.0.0-rc.1",
-            "1.0.0+build.7",
-            "1.0.0-beta+exp.sha.5114f85",
-            "1.0.0+001",
-        })
-        void round_trip_gives_an_equal_version(String text) {
-            SemanticVersion version = SemanticVersion.parse(text);
+        @Test
+        void printed_text_parses_back_to_an_equal_version() {
+            List<SemanticVersion> versions = List.of(
+                    new SemanticVersion(1, 0, 0, List.of("rc", "1"), List.of("build", "7")),
+                    SemanticVersion.of(0, 0, 0),
+                    new SemanticVersion(1, 2, 3, List.of(), List.of("001")));
 
-            assertThat(SemanticVersion.parse(version.toString())).isEqualTo(version);
+            for (SemanticVersion version : versions) {
+                assertThat(SemanticVersion.parse(version.toString())).as(version.toString()).isEqualTo(version);
+            }
         }
 
         @Test
@@ -60,11 +58,6 @@ class SemanticVersionParsingTest {
             assertThat(version.patch()).isEqualTo(3);
             assertThat(version.preRelease()).containsExactly("rc", "1");
             assertThat(version.build()).containsExactly("build", "7");
-        }
-
-        @Test
-        void keeps_leading_zeros_in_build_metadata() {
-            assertThat(SemanticVersion.parse("1.0.0+001").build()).containsExactly("001");
         }
 
         @Test

@@ -96,7 +96,7 @@ public record SemanticVersion(int major, int minor, int patch, List<String> preR
                 build);
     }
 
-    /** Positive integers only: no sign, no leading zeros, and it must fit an {@code int}. */
+    /** Non-negative integers only: no sign, no leading zeros, and it must fit an {@code int}. */
     private static int parseNumber(String digits, String part) {
         if (digits.isEmpty()) {
             throw new IllegalArgumentException("empty " + part);

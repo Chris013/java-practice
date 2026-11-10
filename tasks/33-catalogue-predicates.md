@@ -190,7 +190,7 @@ Four test classes use one fixed catalogue of eight products in [`SampleProducts`
 
 ## Definition of done
 
-- [ ] All 76 tests are green, and the whole task runs in well under a second.
+- [ ] All 77 tests are green, and the whole task runs in well under a second.
 - [ ] `find`, `findFirst`, `project` and `countBy` take `? super Product` in their signatures, and a `Predicate<Object>` works with them.
 - [ ] The `priceBetween` boundary tests pass with bounds written at a different scale, such as `15.000` and `15.0` for a price of `15.00`.
 - [ ] No anonymous classes and no `boolean` flags in any signature.

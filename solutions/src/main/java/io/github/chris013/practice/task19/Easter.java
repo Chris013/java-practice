@@ -11,7 +11,7 @@ import java.time.LocalDate;
  */
 public final class Easter {
 
-    private static final int FIRST_GREGORIAN_YEAR = 1583;
+    static final int FIRST_GREGORIAN_YEAR = 1583;
 
     private Easter() {
     }
@@ -21,7 +21,8 @@ public final class Easter {
      */
     public static LocalDate sunday(int year) {
         if (year < FIRST_GREGORIAN_YEAR) {
-            throw new IllegalArgumentException("Easter is only computed for years from 1583, was " + year);
+            throw new IllegalArgumentException(
+                    "Easter is only computed for years from " + FIRST_GREGORIAN_YEAR + ", was " + year);
         }
         int a = year % 19;
         int b = year / 100;

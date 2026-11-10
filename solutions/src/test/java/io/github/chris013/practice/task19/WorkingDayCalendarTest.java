@@ -298,10 +298,24 @@ class WorkingDayCalendarTest {
         }
 
         @Test
-        void dates_before_1583_are_rejected_because_easter_is_undefined_there() {
-            // 2 January, not 1 January: New Year's Day is listed first and matches 1 January before Easter is asked.
-            assertThatThrownBy(() -> GERMANY.isWorkingDay(LocalDate.of(1500, 1, 2)))
+        void rejects_every_date_before_1583() {
+            LocalDate newYear1500 = LocalDate.of(1500, 1, 1);  // matches New Year's Day
+            LocalDate saturday1500 = LocalDate.of(1500, 1, 6); // a weekend day
+            LocalDate lastDayBefore = LocalDate.of(1582, 12, 31);
+            assertThatThrownBy(() -> GERMANY.isWorkingDay(newYear1500)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.isWorkingDay(saturday1500)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.holidayOn(newYear1500)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.holidaysIn(1582)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.addWorkingDays(lastDayBefore, 1))
                     .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> GERMANY.workingDaysBetween(lastDayBefore, lastDayBefore))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        void accepts_the_first_day_of_1583() {
+            assertThat(GERMANY.holidayOn(LocalDate.of(1583, 1, 1))).contains("New Year's Day");
+            assertThat(GERMANY.holidaysIn(1583)).hasSize(9); // Easter 1583 was 10 April: no collisions
         }
     }
 }

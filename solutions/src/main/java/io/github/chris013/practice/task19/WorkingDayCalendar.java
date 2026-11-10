@@ -17,8 +17,9 @@ import java.util.Optional;
  * never share state and the holiday rules can be read in one place. The holiday rules are fixed for the life of
  * the object, so every method is a pure function of its arguments.
  *
- * <p>Easter is undefined before 1583. A date in an earlier year is rejected with {@code IllegalArgumentException}
- * when the calendar has to check an Easter-based holiday for it.
+ * <p>The calendar supports dates from 1 January 1583, the first full year of the Gregorian calendar. Every method
+ * throws {@code IllegalArgumentException} for an earlier date or year, because Easter, and with it several
+ * holidays, is undefined there.
  */
 public final class WorkingDayCalendar {
 
@@ -71,16 +72,28 @@ public final class WorkingDayCalendar {
         };
     }
 
+    private static void requireSupportedYear(int year) {
+        if (year < Easter.FIRST_GREGORIAN_YEAR) {
+            throw new IllegalArgumentException(
+                    "Only years from " + Easter.FIRST_GREGORIAN_YEAR + " are supported, was " + year);
+        }
+    }
+
+    private static void requireSupported(LocalDate date, String name) {
+        Objects.requireNonNull(date, name);
+        requireSupportedYear(date.getYear());
+    }
+
     /** True if the date is a Monday to Friday and not a holiday in this calendar. */
     public boolean isWorkingDay(LocalDate date) {
-        Objects.requireNonNull(date, "date");
+        requireSupported(date, "date");
         boolean weekend = date.getDayOfWeek() == SATURDAY || date.getDayOfWeek() == SUNDAY;
         return !weekend && holidayOn(date).isEmpty();
     }
 
     /** The name of the holiday on this date, or empty. A holiday on a Saturday or Sunday still has a name. */
     public Optional<String> holidayOn(LocalDate date) {
-        Objects.requireNonNull(date, "date");
+        requireSupported(date, "date");
         return holidays.stream()
                 .filter(holiday -> holiday.dateIn(date.getYear()).filter(date::equals).isPresent())
                 .map(Holiday::name)
@@ -94,7 +107,7 @@ public final class WorkingDayCalendar {
      * @throws IllegalArgumentException if {@code days} is negative
      */
     public LocalDate addWorkingDays(LocalDate start, int days) {
-        Objects.requireNonNull(start, "start");
+        requireSupported(start, "start");
         if (days < 0) {
             throw new IllegalArgumentException("days must not be negative, was " + days);
         }
@@ -125,6 +138,7 @@ public final class WorkingDayCalendar {
     public long workingDaysBetween(LocalDate startInclusive, LocalDate endExclusive) {
         Objects.requireNonNull(startInclusive, "startInclusive");
         Objects.requireNonNull(endExclusive, "endExclusive");
+        requireSupportedYear(startInclusive.getYear());
         if (endExclusive.isBefore(startInclusive)) {
             throw new IllegalArgumentException("end " + endExclusive + " is before start " + startInclusive);
         }
@@ -139,6 +153,7 @@ public final class WorkingDayCalendar {
 
     /** All holiday dates in the year, in date order, including those that fall on a weekend. */
     public List<LocalDate> holidaysIn(int year) {
+        requireSupportedYear(year);
         return holidays.stream()
                 .map(holiday -> holiday.dateIn(year))
                 .flatMap(Optional::stream)

@@ -121,7 +121,7 @@ Implement the calendar in the starter. The types are in [`src/main/java/io/githu
    | `BERLIN` | International Women's Day (8 March) |
    | `NORTH_RHINE_WESTPHALIA` | Corpus Christi (Easter plus 60 days), All Saints' Day (1 November) |
 
-7. **`isWorkingDay(date)`** is true if the date is a Monday to Friday and no holiday of this calendar falls on it. Easter-based holidays cannot be computed before 1583, so for a date in an earlier year the calendar throws `IllegalArgumentException` once it has to check an Easter-based holiday. A 1 January date is the exception, because New Year's Day matches first and the check stops there.
+7. **`isWorkingDay(date)`** is true if the date is a Monday to Friday and no holiday of this calendar falls on it. Dates before 1583 are rejected, see rule 13.
 
 8. **`holidayOn(date)`** returns the name of the holiday on that date, or an empty `Optional`. A holiday on a Saturday or Sunday still has a name. Example: German Unity Day 2026 is a Saturday, and `holidayOn` still names it. If two holidays fall on the same date, it returns the first one in calendar order: the nationwide holidays come first, then the state holidays in the order `germany(state)` adds them.
 
@@ -132,6 +132,8 @@ Implement the calendar in the starter. The types are in [`src/main/java/io/githu
 11. **`holidaysIn(year)`** returns the holiday dates of that year, in date order and without duplicates. It includes holidays that fall on a weekend. Two holidays can share a date: in 2008 Ascension Day (Easter plus 39 days, with Easter on 23 March) and Labour Day are both 1 May, so the list shows that date once and `holidaysIn(2008)` has eight entries.
 
 12. Any `null` argument throws `NullPointerException` with the parameter name, for example `Objects.requireNonNull(date, "date")`.
+
+13. **Years before 1583 are rejected.** Easter is undefined before the Gregorian calendar, so every method throws `IllegalArgumentException` for a date or year before 1583, even on a weekend or on 1 January. Check this first, not as a side effect of computing Easter.
 
 ## Constraints & non-goals
 
@@ -239,7 +241,7 @@ Before you write any production code, the given acceptance test should be red. I
 
 **2. `dateIn` returns an `Optional`, and an empty one means "does not happen this year".** A 29 February holiday has no date in 2027. Throwing an exception for that would force every caller to catch it for an ordinary situation. An empty `Optional` says what happens, and the type makes the caller handle it.
 
-**3. Easter is computed, with its limit written down.** The Anonymous Gregorian algorithm is integer arithmetic. It is valid only for the Gregorian calendar, so `Easter.sunday` rejects years before 1583 instead of returning a wrong date. The alternative, a third-party holiday library, was ruled out by the constraints.
+**3. Easter is computed, with its limit written down.** The Anonymous Gregorian algorithm is integer arithmetic. It is valid only for the Gregorian calendar, so `Easter.sunday` rejects years before 1583 instead of returning a wrong date. The alternative, a third-party holiday library, was ruled out by the constraints. The calendar checks the year itself, at its boundary, so the limit does not depend on which holiday happens to be checked first.
 
 **4. The calendar is immutable.** `WorkingDayCalendar` copies its holiday list with `List.copyOf`, and the national list is a `private static final` constant. A public mutable list would let any caller change every calendar in the JVM, and tests would leak state into each other.
 
@@ -271,7 +273,7 @@ The unit tests, in the order a TDD session produces them. They are a second refe
 4. `EasterOffsets`: Good Friday is `-2`, and the other offsets of the national table.
 5. `NationalHolidays`: each holiday is named on its date, a weekend holiday is still named, and a date with two holidays gets the first one in calendar order.
 6. `StateHolidays`: each state adds its own holidays, and Corpus Christi differs between Bavaria and Berlin.
-7. `AddingWorkingDays`, `CountingWorkingDays`, `HolidaysInYear` and `ArgumentChecks`: the counting rules, the whole-year totals per state, and the null checks.
+7. `AddingWorkingDays`, `CountingWorkingDays`, `HolidaysInYear` and `ArgumentChecks`: the counting rules, the whole-year totals per state, the null checks and the 1583 limit.
 
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task19/WorkingDayCalendarTest.java -->

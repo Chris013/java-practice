@@ -7,6 +7,10 @@ import java.util.Optional;
 /**
  * Working days for a German delivery company: Monday to Friday, minus public holidays.
  *
+ * <p>The calendar supports dates from 1 January 1583, the first full year of the Gregorian calendar. Every method
+ * throws {@code IllegalArgumentException} for an earlier date or year, because Easter, and with it several
+ * holidays, is undefined there.
+ *
  * <p>Task 19: read {@code tasks/19-tdd-working-days.md} first.
  */
 public final class WorkingDayCalendar {

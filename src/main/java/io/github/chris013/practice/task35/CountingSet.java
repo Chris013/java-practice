@@ -44,6 +44,8 @@ public final class CountingSet<E> extends ForwardingSet<E> {
     /**
      * Counts one attempt per element of {@code elements}, duplicates included. The count is taken from
      * the argument's size before the delegate runs, so a batch that fails half way is still counted in full.
+     *
+     * @throws NullPointerException if {@code elements} is null; nothing is counted then
      */
     @Override
     public boolean addAll(Collection<? extends E> elements) {

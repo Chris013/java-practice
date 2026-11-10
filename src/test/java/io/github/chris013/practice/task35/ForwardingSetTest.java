@@ -6,12 +6,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -33,26 +35,26 @@ class ForwardingSetTest {
 
         static Stream<Arguments> set_methods() {
             return Stream.of(
-                    Arguments.of("size", (Consumer<Set<String>>) s -> s.size()),
-                    Arguments.of("isEmpty", (Consumer<Set<String>>) s -> s.isEmpty()),
-                    Arguments.of("contains", (Consumer<Set<String>>) s -> s.contains("A")),
-                    Arguments.of("iterator", (Consumer<Set<String>>) s -> s.iterator()),
-                    Arguments.of("toArray", (Consumer<Set<String>>) s -> s.toArray()),
-                    Arguments.of("toArray", (Consumer<Set<String>>) s -> s.toArray(new String[0])),
-                    Arguments.of("toArray", (Consumer<Set<String>>) s -> s.toArray(String[]::new)),
-                    Arguments.of("add", (Consumer<Set<String>>) s -> s.add("C")),
-                    Arguments.of("remove", (Consumer<Set<String>>) s -> s.remove("A")),
-                    Arguments.of("containsAll", (Consumer<Set<String>>) s -> s.containsAll(List.of("A"))),
-                    Arguments.of("addAll", (Consumer<Set<String>>) s -> s.addAll(List.of("C"))),
-                    Arguments.of("retainAll", (Consumer<Set<String>>) s -> s.retainAll(List.of("A"))),
-                    Arguments.of("removeAll", (Consumer<Set<String>>) s -> s.removeAll(List.of("A"))),
-                    Arguments.of("removeIf", (Consumer<Set<String>>) s -> s.removeIf("A"::equals)),
-                    Arguments.of("clear", (Consumer<Set<String>>) s -> s.clear()),
-                    Arguments.of("forEach", (Consumer<Set<String>>) s -> s.forEach(x -> { })),
-                    Arguments.of("spliterator", (Consumer<Set<String>>) s -> s.spliterator()),
-                    Arguments.of("equals", (Consumer<Set<String>>) s -> s.equals(Set.of())),
-                    Arguments.of("hashCode", (Consumer<Set<String>>) s -> s.hashCode()),
-                    Arguments.of("toString", (Consumer<Set<String>>) s -> s.toString()));
+                    Arguments.of("size()", (Consumer<Set<String>>) s -> s.size()),
+                    Arguments.of("isEmpty()", (Consumer<Set<String>>) s -> s.isEmpty()),
+                    Arguments.of("contains(Object)", (Consumer<Set<String>>) s -> s.contains("A")),
+                    Arguments.of("iterator()", (Consumer<Set<String>>) s -> s.iterator()),
+                    Arguments.of("toArray()", (Consumer<Set<String>>) s -> s.toArray()),
+                    Arguments.of("toArray(Object[])", (Consumer<Set<String>>) s -> s.toArray(new String[0])),
+                    Arguments.of("toArray(IntFunction)", (Consumer<Set<String>>) s -> s.toArray(String[]::new)),
+                    Arguments.of("add(Object)", (Consumer<Set<String>>) s -> s.add("C")),
+                    Arguments.of("remove(Object)", (Consumer<Set<String>>) s -> s.remove("A")),
+                    Arguments.of("containsAll(Collection)", (Consumer<Set<String>>) s -> s.containsAll(List.of("A"))),
+                    Arguments.of("addAll(Collection)", (Consumer<Set<String>>) s -> s.addAll(List.of("C"))),
+                    Arguments.of("retainAll(Collection)", (Consumer<Set<String>>) s -> s.retainAll(List.of("A"))),
+                    Arguments.of("removeAll(Collection)", (Consumer<Set<String>>) s -> s.removeAll(List.of("A"))),
+                    Arguments.of("removeIf(Predicate)", (Consumer<Set<String>>) s -> s.removeIf("A"::equals)),
+                    Arguments.of("clear()", (Consumer<Set<String>>) s -> s.clear()),
+                    Arguments.of("forEach(Consumer)", (Consumer<Set<String>>) s -> s.forEach(x -> { })),
+                    Arguments.of("spliterator()", (Consumer<Set<String>>) s -> s.spliterator()),
+                    Arguments.of("equals(Object)", (Consumer<Set<String>>) s -> s.equals(Set.of())),
+                    Arguments.of("hashCode()", (Consumer<Set<String>>) s -> s.hashCode()),
+                    Arguments.of("toString()", (Consumer<Set<String>>) s -> s.toString()));
         }
 
         @ParameterizedTest(name = "forwards {0}")
@@ -132,14 +134,20 @@ class ForwardingSetTest {
         }
     }
 
-    /** A Set that behaves like {@code real} and records the name of every method called on it. */
+    /**
+     * A Set that behaves like {@code real} and records the signature of every method called on it, such as
+     * {@code toArray(IntFunction)}. The proxy exists so the test can see which delegate method gets called,
+     * without a hand-written Set of twenty methods.
+     */
     @SuppressWarnings("unchecked") // the proxy implements Set, so the cast cannot fail
     private static Set<String> recording(Set<String> real, Collection<String> calls) {
         return (Set<String>) Proxy.newProxyInstance(
                 Set.class.getClassLoader(),
                 new Class<?>[] {Set.class},
                 (proxy, method, args) -> {
-                    calls.add(method.getName());
+                    calls.add(method.getName() + Arrays.stream(method.getParameterTypes())
+                            .map(Class::getSimpleName)
+                            .collect(Collectors.joining(",", "(", ")")));
                     try {
                         return method.invoke(real, args);
                     } catch (InvocationTargetException e) {

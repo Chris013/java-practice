@@ -23,6 +23,15 @@ class CountingSetTest {
     class Counting {
 
         @Test
+        void add_all_of_null_throws_and_counts_nothing() {
+            CountingSet<String> set = CountingSet.overHashSet();
+
+            assertThatThrownBy(() -> set.addAll(null)).isInstanceOf(NullPointerException.class);
+
+            assertThat(set.addAttempts()).isZero();
+        }
+
+        @Test
         void add_counts_one_attempt_and_one_item() {
             CountingSet<String> set = CountingSet.overHashSet();
 

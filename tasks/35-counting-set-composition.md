@@ -38,7 +38,8 @@ classDiagram
     class HashSet
     class ForwardingSet~E~ {
         -Set~E~ delegate
-        +forwardAll() void
+        +add(E) boolean
+        +addAll(Collection) boolean
     }
     class CountingSet~E~ {
         -int attempts
@@ -74,7 +75,7 @@ The key line is `Base->>Counter: add barcode`. The superclass calls **our** `add
 
 ### Self-use: why the subclass is fragile
 
-A method **uses itself** when it calls another method of the same object, and that call goes through dynamic dispatch. `AbstractCollection.addAll` uses `add`. Its Javadoc has an `implSpec` section that says so: it adds each element "by calling add". That sentence is a promise to subclasses, and it is easy to miss. Our author did not read it, or did not know that the promise was there.
+A method **uses itself** when it calls another method of the same object, and that call goes through dynamic dispatch. `AbstractCollection.addAll` uses `add`. Its Javadoc has an `implSpec` section that says so: it iterates over the collection and adds each element in turn, and it throws `UnsupportedOperationException` unless `add` is overridden. That last sentence tells you `add` is called. It is a promise to subclasses, and it is easy to miss. Our author did not read it, or did not know that the promise was there.
 
 The result is that overriding `add` changes the behaviour of a method we never mentioned. Every subclass that overrides a method has to know which other methods of the superclass call it. Nothing in the code shows that.
 
@@ -98,7 +99,7 @@ Our counter fails all three. A counter is not a more specific set, `HashSet` was
 
 ## What I want from you
 
-Build the replacement as a **wrapper**. You will write two classes. Both are complete in the Javadoc, and both bodies are `UnsupportedOperationException` in the starter.
+Build the replacement as a **wrapper**. You will write two classes. The Javadoc describes the contract of both. Their bodies throw `UnsupportedOperationException` in the starter.
 
 1. [`ForwardingSet`](../src/main/java/io/github/chris013/practice/task35/ForwardingSet.java)`<E> implements Set<E>`, constructor `(Set<E> delegate)`.
    * A `null` delegate throws `NullPointerException` with the parameter name.
@@ -106,7 +107,7 @@ Build the replacement as a **wrapper**. You will write two classes. Both are com
    * It is not `final`, because it is designed to be extended. Its Javadoc states the rule that makes extension safe: no method calls another overridable method of the same class (no self-use).
 2. [`CountingSet`](../src/main/java/io/github/chris013/practice/task35/CountingSet.java)`<E> extends ForwardingSet<E>`, constructor `(Set<E> delegate)`. It is `final`.
    * `add(e)` counts one attempt, whether or not `e` is new, and returns what the delegate returns.
-   * `addAll(c)` counts `c.size()` attempts: one per element, duplicates included. An empty collection counts nothing. The return value is the delegate's `addAll` result.
+   * `addAll(c)` counts `c.size()` attempts: one per element, duplicates included. An empty collection counts nothing. `addAll(null)` throws `NullPointerException` and changes nothing. The return value is the delegate's `addAll` result.
    * `int addAttempts()` returns the total number of attempted adds since the set was created.
    * `size()` is inherited and counts **distinct** elements.
    * `static <E> CountingSet<E> overHashSet()` returns a counting set over a new, empty `HashSet`. Each call returns a new set.

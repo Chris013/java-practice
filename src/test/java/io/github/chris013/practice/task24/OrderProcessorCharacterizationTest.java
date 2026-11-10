@@ -119,6 +119,29 @@ class OrderProcessorCharacterizationTest {
             assertThat(shop.processor.process(order("DE", null, item("TEA-GREEN", 1))))
                     .isEqualTo("ERR:PAYMENT_DECLINED");
         }
+
+        @Test
+        void an_empty_order_is_reported_before_a_bad_country() {
+            Shop shop = new Shop();
+
+            assertThat(shop.processor.process(order("CH", null))).isEqualTo("ERR:EMPTY");
+        }
+
+        @Test
+        void a_bad_quantity_is_reported_before_a_bad_country() {
+            Shop shop = new Shop();
+
+            assertThat(shop.processor.process(order("CH", null, item("TEA-GREEN", 0))))
+                    .isEqualTo("ERR:INVALID_QUANTITY");
+        }
+
+        @Test
+        void a_bad_country_is_reported_before_a_bad_coupon() {
+            Shop shop = new Shop();
+
+            assertThat(shop.processor.process(order("CH", "SAVE20", item("TEA-GREEN", 1))))
+                    .isEqualTo("ERR:UNSUPPORTED_COUNTRY");
+        }
     }
 
     @Nested
@@ -139,7 +162,9 @@ class OrderProcessorCharacterizationTest {
             "DE,SAVE10,SOAP-10,5,50.12",
             "DE,FIVEOFF,MUG-BLUE,2,24.90",
             "NL,FIVEOFF,BOOK-KAFKA,1,34.90",
-            "DE,FIVEOFF,BOOK-KAFKA,2,55.00"
+            "DE,FIVEOFF,BOOK-KAFKA,2,55.00",
+            "NL,,BOOK-KAFKA,2,60.00",
+            "DE,FIVEOFF,TEA-GREEN,5,49.90"
         })
         void the_total_is_subtotal_minus_coupon_plus_shipping(
                 String country, String coupon, String sku, int quantity, String total) {
@@ -163,7 +188,7 @@ class OrderProcessorCharacterizationTest {
         }
 
         @Test
-        void a_fixed_discount_of_25_euros_is_applied_exactly_at_the_minimum() {
+        void fiveoff_takes_5_euros_off_at_a_subtotal_of_exactly_25_euros() {
             Shop shop = new Shop();
 
             shop.processor.process(order("DE", "FIVEOFF", item("MUG-BLUE", 2)));
@@ -252,6 +277,32 @@ class OrderProcessorCharacterizationTest {
                     Shipping: 4,90 EUR
                     Total: 34,15 EUR
                     """));
+        }
+
+        @Test
+        void the_customer_is_charged_the_total_once() {
+            Shop shop = new Shop();
+
+            shop.processor.process(order("DE", "SAVE10", item("TEA-GREEN", 2), item("MUG-BLUE", 1)));
+
+            assertThat(shop.payments.charges())
+                    .containsExactly(new FakePayments.Charge("C-42", new BigDecimal("34.15")));
+        }
+
+        @Test
+        void a_subtotal_of_exactly_50_euros_ships_free_and_the_mail_says_so() {
+            Shop shop = new Shop();
+
+            shop.processor.process(order("DE", null, item("TEA-GREEN", 5)));
+
+            assertThat(shop.mailer.sent().get(0).body()).isEqualTo("""
+                    Thank you for your order ORD-20260301-0001.
+                    TEA-GREEN x5: 50,00 EUR
+                    Subtotal: 50,00 EUR
+                    Discount: 0,00 EUR
+                    Shipping: 0,00 EUR
+                    Total: 50,00 EUR
+                    """);
         }
 
         @Test

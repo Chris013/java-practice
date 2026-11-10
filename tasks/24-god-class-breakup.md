@@ -10,7 +10,7 @@
 
 ## The situation
 
-`OrderProcessor` is the class behind the checkout page. Everything that happens when a customer presses "Buy" goes through its one method, `process`: input validation, country and shipping rules, coupons, totals, stock, payment, the order number, the database row and the confirmation mail. The class is about 130 lines, nearly all of it in that method, with nested `if`s, magic numbers and the same rounding written twice.
+`OrderProcessor` is the class behind the checkout page. Everything that happens when a customer presses "Buy" goes through its one method, `process`: input validation, country and shipping rules, coupons, totals, stock, payment, the order number, the database row and the confirmation mail. The class is about 180 lines, nearly all of it in that method, with nested `if`s, magic numbers and the same rounding written twice.
 
 Years ago someone "made it testable" by putting every collaborator behind an interface. That was a good step, and it is the only part of the design that works well today. The logic is still inline. Every change to a coupon touches the same method as a change to the mail text, and nobody dares to touch either without a fear of breaking the other.
 
@@ -28,7 +28,7 @@ So the order of work is the one from *Working Effectively with Legacy Code*: **p
 | **Item** | A SKU, a quantity from 1 to 10, and the unit price in euros with cents. |
 | **Subtotal** | The sum of all lines, before the coupon. |
 | **Coupon** | `SAVE10` takes 10 % off the subtotal. `FIVEOFF` takes 5.00 off, but only when the subtotal is at least 25.00. A blank code means no coupon. Anything else is invalid. |
-| **Shipping** | 4.90 to Germany, 9.90 to Austria, France and the Netherlands. Free when the total after the discount is at least 50.00. |
+| **Shipping** | 4.90 to Germany, 9.90 to Austria, France and the Netherlands. Free when the subtotal after the discount is at least 50.00. |
 | **Order number** | `ORD-yyyyMMdd-NNNN`, counted from 1 per processor. Only a placed order uses a number. |
 | **Port** | An interface for a side effect owned by another team: `StockService` (warehouse), `PaymentGateway`, `MailSender`, `OrderStore` (database). |
 
@@ -66,16 +66,16 @@ Look at the diagram and notice where the decision points and the side effects ar
 ```mermaid
 flowchart LR
     subgraph Today
-        P["OrderProcessor process one long method"]
+        P[OrderProcessor process one long method]
     end
     subgraph Target
-        F["OrderProcessor facade, same contract"] --> U["PlaceOrder use case"]
-        U --> Q["OrderQuote pure: validate and price"]
-        U --> R["StockReservation"]
-        U --> C["OrderConfirmation mail text"]
-        Q --> D["Domain values Money Coupon Country OrderPricing"]
+        F[OrderProcessor facade, same contract] --> U[PlaceOrder use case]
+        U --> Q[OrderQuote pure: validate and price]
+        U --> R[StockReservation]
+        U --> C[OrderConfirmation mail text]
+        Q --> D[Domain values Money Coupon Country OrderPricing]
     end
-    Today -- "small green steps" --> Target
+    Today -->|small green steps| Target
 ```
 
 Be careful with that diagram. The arrows are dependencies, not the order of execution. The execution order is the one in the flowchart above.
@@ -118,6 +118,21 @@ classDiagram
     OrderPricing ..> Coupon
     OrderPricing ..> Country
 ```
+
+Who does what, before and after. Each row is one responsibility. Today they all sit in `process`.
+
+| Responsibility | Today | After the refactoring |
+|---|---|---|
+| Validation | Early `return`s at the top of `process` | `OrderQuote.of` in the pure phase; `OrderLine` refuses a quantity outside 1 to 10 |
+| Country and shipping cost | `"DE".equals` checks and magic numbers in `process` | `Country` enum with its shipping cost |
+| Coupon parsing and minimum | `"SAVE10".equals` and the 25.00 check in `process` | `Coupon` sealed type; the `FIVEOFF` minimum lives in `Coupon.FixedAmount` |
+| Pricing and rounding | Repeated `setScale` calls in `process` | `OrderPricing.calculate` returns every number; `Money` rounds |
+| Stock check, reserve and release | Two loops in `process`, and no release | `StockReservation`: check all lines, then reserve all lines, and release on decline |
+| Payment | `try`/`catch` around `charge` in `process` | `PlaceOrder` calls the `PaymentGateway` port after the pricing phase |
+| Order numbering | Counter and format in `process` | `OrderIds`, called only after the charge succeeded |
+| Mail text | A `StringBuilder` in `process` | `OrderConfirmation` formats the numbers from `OrderPricing` |
+| Persistence | `orderStore.save` in `process` | `PlaceOrder` saves after the payment, with the same numbers |
+| Mapping to legacy strings | `"ERR:..."` literals in `process` | The `OrderProcessor` facade, one `switch` over `PlaceOrderResult` |
 
 ## What I want from you
 
@@ -176,10 +191,10 @@ Some traps to watch for:
 * **The coupon-before-stock order.** An invalid coupon is reported before an out-of-stock product. Your pricing phase must run before the stock check, and the coupon check must run inside it.
 * **The minimum subtotal of `FIVEOFF`** is checked against the subtotal, not against the total after shipping. `24.99` is refused, `25.00` is accepted.
 * **Free shipping is measured after the discount.** A basket of 55.56 with 10 % off is 50.00 and gets free shipping.
-* **Round once.** Money that is rounded at three different places can differ by a cent from the legacy total. Find the place where the legacy code rounds, and keep it.
-* **Counting.** The number goes up only for a placed order. If you assign it before the payment, the characterization test for a rejected request fails, and so does the new-rules test for a declined card.
+* **Round in one place.** Money that is rounded at three different places can differ by a cent from the legacy total. In the solution that place is the `Money` constructor. It is safe because all inputs are already in cents.
+* **Counting.** The number goes up only for a placed order. If you assign it before the payment, the new-rules test for a declined card fails.
 * **Mocks that pin the old call order.** If you test the processor with a mock that checks "reserve, then charge, then save", you have pinned the legacy sequence and made the next change harder. Use the fakes and check the outcome: the stock levels, the saved orders, the mail.
-* **Doubles in pricing.** If the pricing phase needs a fake, something is still in the wrong place. Pricing takes numbers and returns numbers.
+* **Fakes in pricing tests.** If the pricing phase needs a fake, something is still in the wrong place. Pricing takes numbers and returns numbers.
 
 Thinking about the design: *A Philosophy of Software Design* ch. 9 asks whether two things are better together or apart. Ask it about the coupon and the pricing: do they change for the same reason? About the stock and the payment: do they fail for the same reason? A good split groups code that changes together and separates code that changes for different reasons. A bad split is the one you made because "utils" sounded tidy.
 
@@ -187,7 +202,7 @@ Thinking about the design: *A Philosophy of Software Design* ch. 9 asks whether 
 
 Run: `mvn test -Dtest='**/task24/**'`
 
-* `OrderProcessorCharacterizationTest`: 36 tests, green from the start and green after every step.
+* `OrderProcessorCharacterizationTest`: 43 tests, green from the start and green after every step.
 * `OrderProcessorNewRulesTest`: 4 tests. Two of them fail on the starter. They must be green at the end.
 * The fakes (`FakeStock`, `FakePayments`, `RecordingMailer`, `InMemoryOrderStore`) and the test shop in `Shop` are helpers. Read them, do not change them unless you have a good reason.
 
@@ -245,7 +260,10 @@ The checkout page needs `"ERR:..."`, but the core does not. If the core returned
 The number is part of the order, and an order exists only after the payment succeeded. Assigning it earlier would make declined attempts consume numbers, and the characterization tests say that must not happen.
 
 **6. The bug fix is one line in the use case, after the split.**
-Once the reservation and the payment are separate steps in one method, "release on decline" is a single call in the `catch` block. Before the split it would have been the same call, but in the middle of 130 lines where nobody reads it. The structure is what makes the fix obvious and easy to review.
+Once the reservation and the payment are separate steps in one method, "release on decline" is a single call in the `catch` block. Before the split it would have been the same call, but in the middle of 180 lines where nobody reads it. The structure is what makes the fix obvious and easy to review.
+
+**7. Money rounds to cents on construction.**
+The `Money` constructor rounds every amount to cents, unit prices included. That keeps the rounding in one place. It preserves the legacy totals only because `Item` prices already have cents. A unit price with more decimals would be rounded in the solution and not in the legacy code. The `Item` contract rules that out, so the difference is not reachable, but it is the reason the rule must stay written down.
 
 ### Code
 
@@ -291,7 +309,8 @@ Once the reservation and the payment are separate steps in one method, "release 
 | The core returns `"ERR:..."` strings, or `OrderProcessor` is still the core | The legacy contract leaks into every new rule. Keep the strings at the edge only. |
 | `Money` as a `double`, or rounding in three places | A cent of difference in the mail and the database is a support ticket. Round once and test the boundary. |
 | A mock that checks "reserve, then charge, then save" in order | The test pins the legacy sequence, so the next reordering breaks it for no business reason. Test the outcome. |
-| The bug fix moves code into a `finally` block that also releases stock after a successful order | Stock is then given back for every order, and the next customer can buy what is still in the box. Release on decline only. |
+| The release call added first, before the structure | The fix hides in the long method and the refactoring commits then mix structure and behaviour. |
+| A rewrite of the whole class in one commit | Nothing is green in between, so a broken total cannot be traced to a step. |
 | The coupon is checked after the stock is reserved | An invalid coupon then leaves reserved stock behind. The pricing phase must refuse before any side effect. |
 
 </details>

@@ -20,12 +20,12 @@ import java.util.Set;
  */
 public final class MeetingInvite {
 
-    static final Duration MIN_DURATION = Duration.ofMinutes(5);
-    static final Duration MAX_DURATION = Duration.ofHours(8);
-    static final Duration DEFAULT_REMINDER = Duration.ofMinutes(15);
-    static final Duration MAX_REMINDER = Duration.ofHours(24);
-    static final int MAX_TITLE_LENGTH = 100;
-    static final int MAX_ATTENDEES = 50;
+    private static final Duration MIN_DURATION = Duration.ofMinutes(5);
+    private static final Duration MAX_DURATION = Duration.ofHours(8);
+    private static final Duration DEFAULT_REMINDER = Duration.ofMinutes(15);
+    private static final Duration MAX_REMINDER = Duration.ofHours(24);
+    private static final int MAX_TITLE_LENGTH = 100;
+    private static final int MAX_ATTENDEES = 50;
 
     private final String organizer;
     private final String title;
@@ -38,8 +38,7 @@ public final class MeetingInvite {
 
     /**
      * Only reachable through {@link Builder#build()}. All checks run here, on the builder's
-     * values, and the builder keeps no reference to the fields we copy, so later changes to the
-     * builder cannot reach this invite.
+     * values. The attendee list is copied, so later changes to the builder cannot reach this invite.
      */
     private MeetingInvite(Builder builder) {
         this.organizer = normalizeEmail(builder.organizer);
@@ -254,10 +253,9 @@ public final class MeetingInvite {
         }
 
         public Builder attendees(Collection<String> emails) {
-            Objects.requireNonNull(emails, "emails");
-            for (String email : emails) {
-                attendees.add(Objects.requireNonNull(email, "email"));
-            }
+            List<String> checked = new ArrayList<>(Objects.requireNonNull(emails, "emails"));
+            checked.forEach(email -> Objects.requireNonNull(email, "email"));
+            attendees.addAll(checked); // all or nothing: a null element leaves the builder unchanged
             return this;
         }
 

@@ -24,6 +24,16 @@ Nobody can read that line without looking up the signature. Last month that caus
 
 The fix is not "add a comment to the constructor". The fix is to stop asking callers to pass nine positional values. The **Builder** pattern from *Effective Java* Item 2 gives us named steps, and it lets each part of the invite have its own rule.
 
+### Why not the other two classic answers
+
+The usual first reaction to a long constructor is **telescoping**: one constructor with the four required values, one with five, one with six, and so on. It hides the nine-argument call for the common cases, but every rarer combination still ends at a long positional list, and two neighbouring `String` parameters can still be swapped without a compiler error.
+
+The second reaction is the **JavaBeans pattern**: a no-argument constructor plus `setTitle`, `setLocation` and so on. Each call is now readable, but the object exists in a half-built state between the calls, any code that sees it then sees an invalid invite, and it can never be immutable, because the setters stay there forever. *Effective Java* Item 2 rejects both for exactly these reasons.
+
+A **Builder** keeps the readable named steps of JavaBeans, but the steps change a separate, throw-away object. The real invite is created in one go by `build()`, already valid, and never changes again.
+
+Bloch's builder is not quite the GoF Builder. The GoF pattern has a *Director* that drives an abstract *Builder* step by step, so that the same construction process can produce different representations (for example an RTF and a plain-text document). Bloch's builder is a nested class that makes exactly one product type, with a fluent API and a validating `build()`. When Java developers say "builder" today, they almost always mean Bloch's.
+
 I want you to build the `MeetingInvite` and its builder. I also want you to understand *which* checks belong to which step, because that decides whether the API is pleasant or dangerous.
 
 ## The domain
@@ -73,10 +83,11 @@ classDiagram
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant B as Builder
     participant M as MeetingInvite
-    C->>B: builder(organizer, title, start, duration)
-    Note over B: null for a required value fails here
+    participant B as Builder
+    C->>M: builder(organizer, title, start, duration)
+    M-->>C: new Builder
+    Note over M,B: null for a required value fails here
     C->>B: attendee(email)
     C->>B: location(room)
     C->>B: reminderBefore(duration)

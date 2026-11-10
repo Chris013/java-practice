@@ -134,6 +134,14 @@ class MeetingInviteTest {
             assertThatNullPointerException()
                     .isThrownBy(() -> builder.attendees(Arrays.asList("bob@x.de", null)))
                     .withMessage("email");
+            assertThat(builder.build().attendees()).isEmpty();
+        }
+
+        @Test
+        void trims_and_lower_cases_the_organizer() {
+            MeetingInvite invite = MeetingInvite.builder("  Anna@X.DE ", TITLE, START, THIRTY_MINUTES).build();
+
+            assertThat(invite.organizer()).isEqualTo("anna@x.de");
         }
     }
 

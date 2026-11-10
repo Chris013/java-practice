@@ -167,7 +167,7 @@ flowchart LR
 
 Run: `mvn test -Dtest='**/task17/**'`
 
-[`EventBusTest`](../src/test/java/io/github/chris013/practice/task17/EventBusTest.java) groups the rules by theme: **Delivery**, **DeadEvents**, **Failures**, **Reentrancy**, **PECS** (the variance rules of the next section) and **PublishAll**. Read the **PECS** and **Reentrancy** groups first: they pin down the two subtle rules, and the names of the tests say what they do.
+[`EventBusTest`](../src/test/java/io/github/chris013/practice/task17/EventBusTest.java) groups the rules by theme: **Delivery**, **DeadEvents**, **Failures**, **Reentrancy**, **PECS** (the variance rules from "Generics you need for this task" above) and **PublishAll**. Read the **PECS** and **Reentrancy** groups first: they pin down the two subtle rules, and the names of the tests say what they do.
 
 <details>
 <summary>Show the tests</summary>

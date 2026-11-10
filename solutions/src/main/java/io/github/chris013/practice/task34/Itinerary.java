@@ -32,7 +32,7 @@ public final class Itinerary {
         // Copy first: from here on we only look at our own list. This also rejects null elements.
         List<String> copied = List.copyOf(cities);
 
-        String name = traveller.trim();
+        String name = traveller.strip();
         if (name.isEmpty()) {
             throw new IllegalArgumentException("traveller must not be blank");
         }
@@ -101,7 +101,7 @@ public final class Itinerary {
     }
 
     private static String requireCity(String city) {
-        String trimmed = city.trim();
+        String trimmed = city.strip();
         if (trimmed.isEmpty()) {
             throw new IllegalArgumentException("a city must not be blank");
         }

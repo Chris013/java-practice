@@ -47,7 +47,7 @@ class ItineraryTest {
         }
 
         @ParameterizedTest
-        @CsvSource({"''", "'   '"})
+        @CsvSource({"''", "'   '", "'\u2003'"})
         void rejects_a_blank_traveller(String traveller) {
             assertThatThrownBy(() -> new Itinerary(traveller, at(DEPARTURE), at(RETURN), List.of("Rome")))
                     .isInstanceOf(IllegalArgumentException.class);
@@ -60,7 +60,7 @@ class ItineraryTest {
         }
 
         @ParameterizedTest
-        @CsvSource({"''", "'   '"})
+        @CsvSource({"''", "'   '", "'\u2003'"})
         void rejects_a_blank_city(String city) {
             assertThatThrownBy(() -> new Itinerary("Anna", at(DEPARTURE), at(RETURN), List.of("Rome", city)))
                     .isInstanceOf(IllegalArgumentException.class);
@@ -174,6 +174,11 @@ class ItineraryTest {
         }
 
         @Test
+        void with_extra_city_trims_the_new_city() {
+            assertThat(trip().withExtraCity(" Paris ").cities()).containsExactly("Rome", "Paris");
+        }
+
+        @Test
         void with_extra_city_checks_the_new_city() {
             assertThatThrownBy(() -> trip().withExtraCity(" "))
                     .isInstanceOf(IllegalArgumentException.class);
@@ -191,6 +196,19 @@ class ItineraryTest {
             assertThat(moved.durationInDays()).isEqualTo(2);
             assertThat(original.departure()).isEqualTo(at(DEPARTURE));
             assertThat(original.returnDate()).isEqualTo(at(RETURN));
+        }
+
+        @Test
+        void rescheduled_is_not_affected_by_later_changes_to_the_dates_passed_in() {
+            Date newDeparture = at("2026-06-01T10:00:00Z");
+            Date newReturn = at("2026-06-03T10:00:00Z");
+            Itinerary moved = trip().rescheduled(newDeparture, newReturn);
+
+            newDeparture.setTime(0);
+            newReturn.setTime(0);
+
+            assertThat(moved.departure()).isEqualTo(at("2026-06-01T10:00:00Z"));
+            assertThat(moved.returnDate()).isEqualTo(at("2026-06-03T10:00:00Z"));
         }
 
         @Test
@@ -272,6 +290,7 @@ class ItineraryTest {
             assertThat(base).isNotEqualTo(new Itinerary("Ben", at(DEPARTURE), at(RETURN), List.of("Rome")));
             assertThat(base).isNotEqualTo(new Itinerary("Anna", at("2026-05-01T11:00:00Z"), at(RETURN), List.of("Rome")));
             assertThat(base).isNotEqualTo(new Itinerary("Anna", at(DEPARTURE), at(RETURN), List.of("Paris")));
+            assertThat(base).isNotEqualTo(new Itinerary("Anna", at(DEPARTURE), at("2026-05-05T19:00:00Z"), List.of("Rome")));
         }
 
         @Test

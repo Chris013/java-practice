@@ -55,6 +55,16 @@ sequenceDiagram
 
 Nothing in `Itinerary` is wrong on its own line. The problem is that **the object we store is also owned by someone else**. Our validation ran on May 1st, and the stored value became May 9th afterwards.
 
+### The five rules of an immutable class
+
+*Effective Java* Item 17 lists five rules. Here is what each one means for `Itinerary`:
+
+1. **No mutators.** No method changes the object. `withExtraCity` and `rescheduled` return a new itinerary instead.
+2. **The class cannot be extended.** It is `final`, so no subclass can add mutable state or override a getter.
+3. **All fields are `final`.** The compiler then guarantees that each field is assigned once, in the constructor.
+4. **All fields are `private`.** Callers go through the accessors, so the class decides what leaves it (Item 15).
+5. **Exclusive access to mutable components.** If a field refers to something mutable, nobody outside may hold a reference to it: copy on the way in, copy on the way out. This is the rule the legacy class breaks, and the reason for this task.
+
 ### The shape of the change
 
 ```mermaid
@@ -89,7 +99,7 @@ This task has **no skeleton**. [`Itinerary`](../src/main/java/io/github/chris013
 
 1. **[`Itinerary`](../src/main/java/io/github/chris013/practice/task34/Itinerary.java)`(traveller, departure, returnDate, cities)`** with `java.util.Date` for the two dates and `List<String>` for the cities.
    * `null` for any argument → `NullPointerException`, including a `null` element in `cities`.
-   * `traveller` is trimmed and must not be blank → `IllegalArgumentException`.
+   * `traveller` is trimmed (`strip()`) and must not be blank → `IllegalArgumentException`.
    * `departure` must not be after `returnDate`. Equal is allowed (a day trip). A return one millisecond before departure is rejected.
    * `cities` must not be empty. Each city is trimmed and must not be blank.
 2. **Accessors:**
@@ -105,7 +115,7 @@ This task has **no skeleton**. [`Itinerary`](../src/main/java/io/github/chris013
 ## Constraints & non-goals
 
 * **Keep the public API.** The signatures in the list above are fixed. Other teams pass `java.util.Date`, so that type stays in the public API. Stretch goal 1 is the way to move away from it later.
-* **Do not use `clone()`** on the parameters. The rules are in the Key decisions.
+* **Do not use `clone()`** on the parameters. `Date` is not final, so a caller can pass a subclass that overrides `clone()`; see the `EvilDate` test.
 * **No libraries.** Plain Java 25, JUnit and AssertJ for the tests.
 * Times come from `Date` and `Instant`. There is no `Clock` in this task, because nothing here depends on "now".
 
@@ -165,7 +175,7 @@ The `Attacks` group uses two `Date` subclasses that the test defines itself. One
 
 **1. Store `Instant`, not `Date`.** `Date` is mutable, so storing one means storing a value that a caller can change. `Instant` is immutable, has the same precision (milliseconds in this case), and has `isAfter` and `ChronoUnit.DAYS.between`. The alternative was storing a `long`. That also works, but `Instant` keeps the code readable and makes the duration calculation a one-liner.
 
-**2. Snapshot each `Date` once, before validation.** The public constructor converts each `Date` to an `Instant` with `Instant.ofEpochMilli(date.getTime())`, and the private constructor validates those `Instant`s. The `getTime()` call happens exactly once per date, so the value we check is the value we store. The alternative was `new Date(d.getTime())` followed by validation of the copy. It is correct, but it still goes through a `Date`, and it needs a second `Date` for every getter anyway.
+**2. Snapshot each `Date` once, before validation.** The public constructor converts each `Date` to an `Instant` with `Instant.ofEpochMilli(date.getTime())`, and the private constructor validates those `Instant`s. The `getTime()` call happens exactly once per date, so the value we check is the value we store. The alternative was `new Date(d.getTime())` followed by validation of the copy. It is correct, but the validated copy is still a mutable `Date`, so the "validate what you store" rule depends on nobody touching it later. With `Instant` that rule cannot be broken by construction.
 
 **3. Not `clone()`.** `Date.clone()` is public and overridable, so a `Date` subclass can return `this` (the `EvilDate` test). A copy made with `clone()` is then no copy at all. *Effective Java* Item 50 makes the same point. The constructor-based copy, or here the conversion to `Instant`, always gives a plain `Date` or a value that is not a `Date` at all.
 
@@ -175,7 +185,7 @@ The `Attacks` group uses two `Date` subclasses that the test defines itself. One
 
 **6. `withExtraCity` and `rescheduled` return new objects.** Both build a new list or new instants and call the private constructor. There is no mutator and no `return this`. The original is never touched, so a caller who keeps the old itinerary (for a receipt, say) still has the trip that was booked.
 
-**7. `final` class and `private final` fields.** A non-final class can be subclassed, and a subclass could add a mutable field or override `durationInDays`. Making the class `final` closes that door (*Effective Java* Item 17, rule 2, and Item 19). Making the fields `private final` is rules 3 and 4 of Item 17. The reflection test checks both.
+**7. `final` class and `private final` fields.** A non-final class can be subclassed, and a subclass could add a mutable field or override `durationInDays`. Making the class `final` closes that door (rule 2 of the five rules above, and Item 19). Making the fields `private final` is rules 3 and 4. Decisions 1 to 4 are rule 5. The reflection test checks both.
 
 ### Code
 

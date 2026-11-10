@@ -128,9 +128,13 @@ class PasswordResetServiceTest {
 
             assertThat(mailer.sent()).hasSize(4);
         }
+    }
+
+    @Nested
+    class Construction {
 
         @Test
-        void refuses_null_collaborators_at_construction() {
+        void refuses_null_collaborators() {
             assertThatNullPointerException()
                     .isThrownBy(() -> new PasswordResetService(
                             null, tokens, PasswordResetServiceTest.this::nextToken, hasher, mailer, clock))

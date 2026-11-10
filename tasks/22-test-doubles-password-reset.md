@@ -86,7 +86,7 @@ Do the refactoring experiment described below, and write down what you saw in yo
 ## Constraints & non-goals
 
 * **Do not change `src/main`.** The production code is complete, and it is identical in the starter and the solution. If you think it is wrong, explain why in your PR description. The refactoring experiment is the one time you touch it, and you revert it.
-* **Do not mock what you do not need to mock.** Mockito is allowed. Use it where the requirement is an outgoing call that nothing else can observe, and add a comment that says why a hand-written double would be less clear.
+* **Do not mock what you do not need to mock.** Mockito is allowed. Use it where the requirement is an outgoing call that nothing else can observe, or where you need a collaborator to fail, and add a comment that says why a hand-written double would be less clear.
 * **Do not mock `Clock`.** Use `Clock.fixed` or a small `MutableClock`.
 * No `Thread.sleep` and no `Instant.now()`. The SHA-256 hasher that ships with the task is fast enough to use directly.
 * The whole task test run must stay well under 5 seconds.
@@ -99,7 +99,7 @@ Meszaros uses "test double" as the umbrella term. There are five kinds, and each
 
 | Double | What it does | Example in this task |
 |---|---|---|
-| **Dummy** | Is passed along to satisfy a parameter and is never used | The token store and the generator in a test of an unknown email. The service never touches them. |
+| **Dummy** | Is passed along to satisfy a parameter and is never used | The `TokenGenerator` in the unknown-email test: the service returns before it asks for a token, so any implementation would do. |
 | **Stub** | Returns canned answers to calls, nothing more | A `TokenGenerator` that hands out predictable tokens (`token-1`, `token-2`), so the test knows the raw token. |
 | **Spy** | Records calls so that the test can read them afterwards | A `RecordingMailer` that keeps every sent message in a list. |
 | **Mock** | Is told which calls to expect, and fails on a missing or an unexpected call | `mock(Mailer.class)` in the unknown-email test, verified with `verifyNoInteractions`. |
@@ -140,7 +140,7 @@ The mockist test failed because it tested the steps, not the result. The state-b
 
 ### Where mocks are justified
 
-A mock is a good choice when the requirement is an outgoing call that has no other trace. "Unknown emails send no mail" is such a rule: the only thing that changes is that the mailer receives nothing. A hand-written `RecordingMailer` can also check that, by looking at its list. Both work. The reference suite uses Mockito in two places, a mock for the unknown-email test and `doThrow` for the failing mailer, so you can see both forms, and each one explains in a comment why it is clearer than a hand-written double.
+A mock is a good choice when the requirement is an outgoing call that has no other trace. "Unknown emails send no mail" is such a rule: the only thing that changes is that the mailer receives nothing. A hand-written `RecordingMailer` can also check that, by looking at its list. Both work. The reference suite uses Mockito in two places, a mock for the unknown-email test and `doThrow` for the failing mailer, so you can see both forms, and each one says in a comment why it was chosen over a hand-written double.
 
 `Clock` is different. It is a JDK type, it has one method that matters, and we do not own it. Mocking it means stubbing `instant()` in every test, and the test then reads like a clock setup instead of a business rule. The same goes for value objects such as `User` and `ResetToken`: there is nothing to isolate.
 

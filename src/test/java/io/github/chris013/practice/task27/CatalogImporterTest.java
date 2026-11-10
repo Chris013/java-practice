@@ -115,6 +115,24 @@ class CatalogImporterTest {
         }
 
         @Test
+        void sends_only_full_batches_when_the_rows_divide_evenly() {
+            importLines(2, 0, HEADER,
+                    row("A-1", "One", "1", "1"),
+                    row("A-2", "Two", "2", "2"),
+                    row("A-3", "Three", "3", "3"),
+                    row("A-4", "Four", "4", "4"));
+
+            assertThat(repository.batchSizes()).containsExactly(2, 2);
+        }
+
+        @Test
+        void never_calls_the_repository_when_no_row_is_valid() {
+            importLines(10, 10, HEADER, "ab;Tea;1;1");
+
+            assertThat(repository.batchSizes()).isEmpty();
+        }
+
+        @Test
         void keeps_semicolons_and_doubled_quotes_inside_a_quoted_field() {
             importLines(10, 0, HEADER, "COF-1;\"Coffee; \"\"dark\"\" roast\";12,99;5");
 
@@ -235,7 +253,9 @@ class CatalogImporterTest {
         @ValueSource(strings = {
             "COF-1;\"Coffee\"x;12,99;5",
             "COF-1;\"Coffee;12,99;5",
-            "COF-1;Cof\"fee;12,99;5"})
+            "COF-1;Cof\"fee;12,99;5",
+            "COF-1; \"Coffee\";12,99;5",
+            "COF-1;\"Coffee\" ;12,99;5"})
         void reports_malformed_quotes_as_a_line_error(String row) {
             ImportReport report = importLines(10, 10, HEADER, row);
 
@@ -334,6 +354,17 @@ class CatalogImporterTest {
             assertThat(repository.allProducts()).isEmpty();
             // The importer reads in chunks of a few thousand characters. It must not read the whole 10,000 lines.
             assertThat(reader.charsRead()).isLessThan(text.length() / 10);
+        }
+
+        @Test
+        void keeps_every_error_of_the_row_that_crosses_the_limit() {
+            // Line 2 has one error and fills the limit of 1. Line 3 has four errors, so the total becomes 5.
+            // The whole row is added, so the report holds all four of its errors, not just the first.
+            ImportReport report = importLines(10, 1, HEADER, "x;a;1;1", "ab;;0;-1", row("COF-1", "Coffee", "1", "1"));
+
+            assertThat(report.aborted()).isTrue();
+            assertThat(report.errors()).hasSize(5);
+            assertThat(report.rowsRead()).isEqualTo(2);
         }
     }
 
@@ -440,8 +471,41 @@ class CatalogImporterTest {
                     .hasCauseInstanceOf(IOException.class);
         }
 
+        @Test
+        void importFrom_a_path_closes_the_file_when_the_header_is_wrong() {
+            CountingReader file = new CountingReader("name;price;stock\n");
+
+            assertThatThrownBy(() -> importerOpening(file).importFrom(Path.of("prices.csv")))
+                    .isInstanceOf(CsvFormatException.class)
+                    .hasMessageContaining("sku");
+            assertThat(file.isClosed()).isTrue();
+        }
+
+        @Test
+        void importFrom_a_path_closes_the_file_when_reading_fails() {
+            CountingReader file = new FailingReader();
+
+            assertThatThrownBy(() -> importerOpening(file).importFrom(Path.of("prices.csv")))
+                    .isInstanceOf(UncheckedIOException.class)
+                    .hasCauseInstanceOf(IOException.class);
+            assertThat(file.isClosed()).isTrue();
+        }
+
         private CatalogImporter importerOpening(Reader file) {
             return new CatalogImporter(repository, 10, 0, path -> file);
+        }
+
+        /** A reader whose every read fails, to see that the file is still closed. */
+        private static final class FailingReader extends CountingReader {
+
+            FailingReader() {
+                super("");
+            }
+
+            @Override
+            public int read(char[] buffer, int offset, int length) throws IOException {
+                throw new IOException("disk failed");
+            }
         }
     }
 

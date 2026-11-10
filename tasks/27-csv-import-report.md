@@ -79,7 +79,9 @@ sequenceDiagram
             V-->>V: one RowError per failing field
         end
     end
-    B->>Repo: saveAll with the last partial batch
+    opt not aborted and batch not empty
+        B->>Repo: saveAll with the last partial batch
+    end
 ```
 
 ## A sample file and its report
@@ -130,7 +132,7 @@ Implement [`CatalogImporter`](../src/main/java/io/github/chris013/practice/task2
 **Splitting a line**
 
 5. Fields are separated by `;`. A field may be wrapped in `"`. Inside quotes, `;` is a normal character and `""` is one `"`.
-6. A quote only counts as an opening quote when it is the first character of a field. A quote in the middle of an unquoted field is malformed.
+6. A quote only counts as an opening quote when it is the first character of a field. A quote in the middle of an unquoted field is malformed. Spaces around a quoted field are not allowed: `; "Coffee"` is malformed.
 7. Quotes do not span lines. A line that has text after a closing quote (other than `;` or the end of the line), or that ends inside quotes, is a row error on field `line` with the message `malformed quotes`.
 8. Unquoted fields are trimmed. Quoted fields are kept exactly as written between the quotes.
 9. A row with a different number of fields than the header is a row error on field `line` with the message `expected N fields but found M`, where `N` is the number of header columns (extra columns included).

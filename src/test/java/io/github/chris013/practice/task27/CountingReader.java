@@ -8,7 +8,7 @@ import java.io.StringReader;
  * A reader that counts the characters it hands out and records whether it was closed. It can also fail on
  * close, to test how the importer handles a failing close.
  */
-final class CountingReader extends Reader {
+class CountingReader extends Reader {
 
     private final StringReader delegate;
     private final IOException closeFailure;

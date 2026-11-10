@@ -15,6 +15,9 @@ final class RecordingRepository implements ProductRepository {
 
     @Override
     public void saveAll(List<Product> batch) {
+        if (batch.isEmpty()) {
+            throw new AssertionError("saveAll called with an empty batch");
+        }
         if (failure != null) {
             throw failure;
         }

@@ -151,6 +151,7 @@ public final class Account {
         return version;
     }
 
+    /** The events recorded since the last {@link #markCommitted()}, as an unmodifiable copy. */
     public List<AccountEvent> uncommittedEvents() {
         return List.copyOf(uncommitted);
     }
@@ -160,6 +161,7 @@ public final class Account {
         uncommitted.clear();
     }
 
+    /** Records the event as a new fact: applies it to the state and adds it to the uncommitted list. */
     private void record(AccountEvent event) {
         apply(event);
         uncommitted.add(event);
@@ -179,7 +181,7 @@ public final class Account {
             case MoneyDeposited deposited -> balance = balance.plus(deposited.amount());
             case MoneyWithdrawn withdrawn -> balance = balance.minus(withdrawn.amount());
             case OverdraftLimitChanged changed -> overdraftLimit = changed.newLimit();
-            case AccountClosed accountClosed -> closed = true;
+            case AccountClosed _ -> closed = true;
         }
         version++;
     }

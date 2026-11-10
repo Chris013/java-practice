@@ -46,6 +46,7 @@ class AccountServiceTest {
         private final Consumer<EventStore> otherWriter;
         private int racesLeft;
         private int appendCalls;
+        private int loadCalls;
 
         RacingEventStore(EventStore delegate, int races, Consumer<EventStore> otherWriter) {
             this.delegate = delegate;
@@ -55,6 +56,7 @@ class AccountServiceTest {
 
         @Override
         public List<AccountEvent> load(AccountId id) {
+            loadCalls++;
             return delegate.load(id);
         }
 
@@ -70,6 +72,10 @@ class AccountServiceTest {
 
         int appendCalls() {
             return appendCalls;
+        }
+
+        int loadCalls() {
+            return loadCalls;
         }
     }
 
@@ -156,20 +162,21 @@ class AccountServiceTest {
 
         @Test
         void revalidates_a_withdrawal_that_was_fine_on_the_stale_balance() {
-            // The bug from the situation: balance 100.00, limit 500.00. Withdrawing 500.00 looks fine (-400.00).
-            // A concurrent withdrawal of 150.00 lands first, so the real balance is -50.00 and 500.00 would
-            // take it to -550.00, past the limit. The retry must refuse, not write.
+            // Balance 100.00, limit 500.00. Both writers see 100.00 and withdraw 500.00 (-400.00, fine).
+            // The other one lands first, so the retry sees -400.00, and -400.00 - 500.00 = -900.00 is past
+            // -500.00: refused.
             service.open("Anna", Money.euros("500.00"));
             service.deposit(ID, Money.euros("100.00"));
             RacingEventStore racing = new RacingEventStore(store, 1,
-                    writer -> writeConcurrently(writer, new MoneyWithdrawn(ID, T0, Money.euros("150.00"))));
+                    writer -> writeConcurrently(writer, new MoneyWithdrawn(ID, T0, Money.euros("500.00"))));
             AccountService racingService = new AccountService(racing, clock, () -> ID);
 
             assertThatThrownBy(() -> racingService.withdraw(ID, Money.euros("500.00")))
                     .isInstanceOf(InsufficientFundsException.class);
 
-            assertThat(service.balanceOf(ID)).isEqualTo(Money.euros("-50.00"));
+            assertThat(service.balanceOf(ID)).isEqualTo(Money.euros("-400.00"));
             assertThat(racing.appendCalls()).isEqualTo(1);
+            assertThat(racing.loadCalls()).isEqualTo(2);
             assertThat(store.load(ID)).hasSize(3);
         }
 
@@ -197,6 +204,7 @@ class AccountServiceTest {
             assertThatThrownBy(() -> racingService.withdraw(ID, Money.euros("5.00")))
                     .isInstanceOf(InsufficientFundsException.class);
 
+            assertThat(racing.loadCalls()).isEqualTo(1);
             assertThat(racing.appendCalls()).isZero();
         }
     }

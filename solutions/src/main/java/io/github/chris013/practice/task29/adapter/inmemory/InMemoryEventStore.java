@@ -28,7 +28,7 @@ public final class InMemoryEventStore implements EventStore {
     @Override
     public void append(AccountId id, long expectedVersion, List<AccountEvent> events) {
         Objects.requireNonNull(id, "id");
-        List<AccountEvent> toAppend = List.copyOf(events);
+        List<AccountEvent> toAppend = List.copyOf(Objects.requireNonNull(events, "events"));
         streams.compute(id, (key, existing) -> {
             List<AccountEvent> current = existing == null ? List.of() : existing;
             if (current.size() != expectedVersion) {

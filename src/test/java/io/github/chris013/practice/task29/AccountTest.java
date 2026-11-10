@@ -271,6 +271,14 @@ class AccountTest {
             assertThat(account.uncommittedEvents()).isEmpty();
             assertThat(account.version()).isEqualTo(2);
         }
+
+        @Test
+        void checks_the_arguments_before_the_closed_state() {
+            Account account = committedAccount(LIMIT_500);
+            account.close(T1);
+
+            assertThatThrownBy(() -> account.deposit(Money.zero(), T2)).isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Nested
@@ -302,13 +310,13 @@ class AccountTest {
 
         @Test
         void applies_an_old_withdrawal_that_today_would_refuse() {
-            // Under today's rules a limit of 0.00 would refuse this withdrawal. The fact is in the history, though,
-            // so replay must accept it: apply never validates.
+            // Opened in 2026 with a limit of 500.00. A limit capped at 300.00 from 2027 would refuse this,
+            // replay must not.
             List<AccountEvent> oldHistory = List.of(
-                    new AccountOpened(ID, T0, "Anna", Money.zero()),
-                    new MoneyWithdrawn(ID, T1, Money.euros("100.00")));
+                    new AccountOpened(ID, T0, "Anna", LIMIT_500),
+                    new MoneyWithdrawn(ID, T1, Money.euros("450.00")));
 
-            assertThat(Account.replay(oldHistory).balance()).isEqualTo(Money.euros("-100.00"));
+            assertThat(Account.replay(oldHistory).balance()).isEqualTo(Money.euros("-450.00"));
         }
 
         @Test

@@ -35,7 +35,7 @@ public final class AccountStatement {
         for (AccountEvent event : history) {
             LocalDate date = LocalDate.ofInstant(event.occurredAt(), ZoneOffset.UTC);
             switch (event) {
-                case AccountOpened opened ->
+                case AccountOpened _ ->
                         lines.add(new StatementLine(date, "Account opened", Money.zero(), balance));
                 case MoneyDeposited deposited -> {
                     balance = balance.plus(deposited.amount());
@@ -48,7 +48,7 @@ public final class AccountStatement {
                 case OverdraftLimitChanged changed ->
                         lines.add(new StatementLine(
                                 date, "Overdraft limit set to " + changed.newLimit(), Money.zero(), balance));
-                case AccountClosed accountClosed ->
+                case AccountClosed _ ->
                         lines.add(new StatementLine(date, "Account closed", Money.zero(), balance));
             }
         }

@@ -87,6 +87,34 @@ classDiagram
 
 The set is closed: these five events are the only ones. Because the interface is sealed, a `switch` over it must handle all five. If someone adds a sixth event, every `switch` stops compiling until it is handled. That is the safety net you want.
 
+### Ports and adapters
+
+```mermaid
+classDiagram
+    class Account {
+        +deposit(amount, now)
+        +withdraw(amount, now)
+        +uncommittedEvents() List
+    }
+    class EventStore {
+        <<interface>>
+        +load(id) List
+        +append(id, expectedVersion, events)
+    }
+    class AccountService
+    class InMemoryEventStore
+    class AccountStatement {
+        +of(history) AccountStatement
+        +lines() List
+    }
+    AccountService --> Account : replays and commands
+    AccountService --> EventStore : loads and appends
+    InMemoryEventStore ..|> EventStore
+    AccountStatement ..> AccountEvent : reads events only
+```
+
+The domain is `Account`, the events and `Money`. It knows nothing about storage. `EventStore` is a port, an interface that the application layer needs, and `AccountService` is the use case that talks to it. `InMemoryEventStore` is an adapter that implements the port. `AccountStatement` is a projection on the read side. It depends on the events, not on `Account`. So a change to the aggregate's methods never forces a change in the statement, and a new statement column never touches the aggregate.
+
 ### Why expected versions stop the lost update
 
 ```mermaid
@@ -208,7 +236,7 @@ Run: `mvn test -Dtest='**/task29/**'`
 1. **Snapshots every 100 events.** Store the state at versions 100, 200, and so on. `replay` starts from the latest snapshot and applies only the newer events. Test that a snapshot plus the tail gives the same balance as a full replay.
 2. **An upcaster for a renamed event.** Rename `MoneyWithdrawn` to `CashWithdrawn` in the sealed hierarchy. Old histories must still replay. Write the upcaster so that the old name is read as the new record, and test both shapes.
 3. **A second projection: monthly interest.** Build a read model that adds interest to the negative balance at the end of each month, from the same events. Show that it does not touch `Account`.
-4. **Persist the events as JSON in a file.** Write them as the store would, read them back, and check that the replayed account is the same as before the round trip.
+4. **Persist the events as JSON in a file.** Write them as the store would, read them back, and check that the replayed account is the same as before the round trip. Use the JSON writer from [Task 30](30-json-writer.md) to write each event as one line.
 5. **Make the retry count configurable.** Pass the attempt limit to the service. Test that one attempt means no retry at all.
 
 ---

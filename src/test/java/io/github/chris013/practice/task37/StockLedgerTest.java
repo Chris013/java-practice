@@ -59,10 +59,14 @@ class StockLedgerTest {
     class BinIdentity {
 
         @Test
-        void the_boxed_200_values_used_below_are_two_different_objects() {
-            // The precondition of the bug: Integer.valueOf caches only -128..127.
+        void the_boxed_values_used_below_are_different_objects_outside_the_cache() {
+            // The precondition of the bugs: Integer.valueOf caches only -128..127.
+            assertThat(Integer.valueOf(128)).isNotSameAs(Integer.valueOf(128));
             assertThat(Integer.valueOf(200)).isNotSameAs(Integer.valueOf(200));
+            assertThat(Integer.valueOf(1000)).isNotSameAs(Integer.valueOf(1000));
+            assertThat(Integer.valueOf(-129)).isNotSameAs(Integer.valueOf(-129));
             assertThat(Integer.valueOf(127)).isSameAs(Integer.valueOf(127));
+            assertThat(Integer.valueOf(-128)).isSameAs(Integer.valueOf(-128));
         }
 
         // Bug 2: sameBin compares references with ==, so 200 and 200 are "different" bins.
@@ -167,8 +171,9 @@ class StockLedgerTest {
             assertThat(Integer.signum(result)).isEqualTo(expectedSign);
         }
 
+        // Characterization: passes on the starter too, because TimSort never merges a list this short.
         @Test
-        void sorts_small_and_large_quantities_in_numeric_order() {
+        void sorts_a_short_list_correctly_even_with_the_broken_comparator() {
             ledger.receive("A", 1000);
             ledger.receive("B", 5);
             ledger.receive("C", 1000);
@@ -181,11 +186,11 @@ class StockLedgerTest {
 
         // Bug 4 at production size: TimSort uses insertion sort below 32 elements and merges from 32 on. Only the
         // merge checks the comparator's contract, so the broken lambda throws "Comparison method violates its
-        // general contract!" for some lists of 32 or more values.
+        // general contract!" for some lists of 32 or more values, including this one of exactly 32.
         @Test
         void sorts_many_quantities_that_include_repeated_large_values() {
             List<Integer> expected = new ArrayList<>();
-            for (int sku = 0; sku < 60; sku++) {
+            for (int sku = 0; sku < 32; sku++) {
                 int quantity = sku % 3 == 0 ? 1000 : sku;
                 ledger.receive("SKU-" + sku, quantity);
                 expected.add(quantity);

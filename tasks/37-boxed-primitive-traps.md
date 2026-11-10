@@ -68,15 +68,15 @@ flowchart TD
 
 **First, a word about this starter.** `StockLedger` is legacy code. It passes its tests, but it has **five bugs**: four of them are testable and show up with unknown SKUs, bin numbers above 127, and large lists, and the fifth is a performance bug. The bug tests fail on the starter. Before you change anything, run them and, for each failing test, write down in one or two sentences what it expects, what the code actually does, and why. Only then fix the code. If you cannot explain a failure, you have not understood the bug yet.
 
-Here are the bugs and their symptoms:
+Here are the symptoms the support team reported. Finding the causes is your job:
 
-| # | Symptom in production | Cause | Fix |
-|---|---|---|---|
-| 1 | Picking an unknown SKU throws `NullPointerException` | `int q = stock.get(sku)` unboxes the `null` that `get` returns | `stock.getOrDefault(sku, 0)` |
-| 2 | Bin 200 is not the same bin as bin 200 | `binA == binB` compares references, and 200 is not in the Integer cache | `Objects.equals(binA, binB)` |
-| 3 | Closing bin 3 closes the bin at index 3, or throws `IndexOutOfBoundsException` | `openBins.remove(binNumber)` with an `int` calls `remove(int index)` | `openBins.remove(Integer.valueOf(binNumber))` |
-| 4 | Sorting throws `Comparison method violates its general contract!` for some lists of 32 or more quantities | The hand-written comparator compares equal boxed values with `==`, so two equal 1000s do not compare as equal | `Comparator.naturalOrder()` |
-| 5 | The nightly total is slow (**performance only**: the result is already correct) | `Long total` is unboxed and reboxed on every iteration | `long total` |
+| # | Symptom in production |
+|---|---|
+| 1 | Picking an unknown SKU throws `NullPointerException` |
+| 2 | Bin 200 is not the same bin as bin 200 |
+| 3 | Closing bin 3 closes the bin at index 3, or throws `IndexOutOfBoundsException` |
+| 4 | Sorting throws `Comparison method violates its general contract!` for some lists of 32 or more quantities |
+| 5 | The nightly total is slow (**performance only**: the result is already correct) |
 
 The contract of the class, in numbered rules:
 
@@ -98,13 +98,13 @@ The contract of the class, in numbered rules:
 
 * **Reproduce each bug before you fix it.** A `jshell` session with `Integer.valueOf(200) == Integer.valueOf(200)` takes thirty seconds, and it is worth more than any explanation I could write here.
 * **Explain why the old tests passed.** The cache makes `==` look correct for every value from -128 to 127, and the old tests never went above that. A test suite that uses only small numbers can give you false confidence. The `isNotSameAs` assertion in the tests is there to prove that the precondition of the bug is true.
-* **Do not "fix" `sameBin` by unboxing.** `binA.intValue() == binB.intValue()` throws a `NullPointerException` for `null`, which breaks rule 2. `Objects.equals` compares values and handles `null` in one call.
-* **Find the overload that is chosen.** Ask yourself which `remove` the compiler picks for `int` and for `Integer`. The JLS answer is in §15.12.2, phase 1 is "no boxing". If you want to keep the list semantics, `Integer.valueOf(binNumber)` makes the call pick `remove(Object)`. Java also allows `remove((Object) binNumber)`, but the `Integer.valueOf` form says what you mean.
+* **What does `==` compare on two `Integer`s?** Answer that first. Then check your fix against rule 2: a fix that unboxes both sides throws a `NullPointerException` for `null`. Look for a JDK method that compares values and handles `null` in one call.
+* **Find the overload that is chosen.** Ask yourself which `remove` the compiler picks for `int` and for `Integer`. The JLS answer is in §15.12.2, phase 1 is "no boxing". Then ask how you can make the compiler pick the other overload, in a way that a reader understands at a glance.
 * **Look at the comparator's contract.** A comparator must be consistent: if `compare(a, b)` is 1, then `compare(b, a)` must be -1, and equal values must compare as 0. Your lambda says 1 for two equal distinct objects in both directions. That is a broken contract, and `TimSort` only checks it when it merges runs, which starts at 32 elements. Below that size, the bug can stay hidden, which is why the small tests pass.
 * **For `totalUnits`,** find every place where a boxed type is used as a variable. `Long total = 0L` is one of them, and `for (Integer quantity : ...)` is another. You can keep the loop, but the accumulator must be a `long`.
 * You do not have to trust the reading above for bug 5. Compile the starter and run `javap -c -p` on `StockLedger.class`. Look at `totalUnits`: you should see `Long.valueOf` and `Long.longValue` calls inside the loop. Then do the same with your fix and count them again.
 * A common mistake is to think that the cache is a language feature you can rely on. It is a guarantee for -128 to 127 only (JLS §5.1.7). The upper bound can be raised with `-XX:AutoBoxCacheMax`, and that changes the results of `==` for your JVM, not for the Java language. Never write code that depends on it.
-* **Write the failure down before you fix it.** For each failing test, write one sentence on what it expects and one on what the code does. For example, `closing_a_bin_removes_the_bin_with_that_number` expects `[5, 9, 4]`. The starter returns `[5, 3, 9]`: it removed the element at index 3, which is bin 4, not bin 3. If your sentence says "the test is wrong", check the spec again first.
+* **Write the failure down before you fix it.** For each failing test, write one sentence on what it expects and one on what the code does. For example, for `closing_a_bin_removes_the_bin_with_that_number`: which bin is missing from the starter's result, and why that one? If your sentence says "the test is wrong", check the spec again first.
 * **Test the edges of the cache, not the middle.** The numbers 127 and 128 are the upper edge, and -128 and -129 are the lower edge. The value 5 and the value 6 behave the same in the old code, so a test with them proves nothing about boxing. The tests in this task that matter use at least one of the edge values, or 200.
 
 ## Tests
@@ -146,6 +146,16 @@ Run: `mvn test -Dtest='**/task37/**'`
 
 <details>
 <summary>Spoiler: open only after you have made a serious attempt</summary>
+
+### The five bugs
+
+| # | Symptom in production | Cause | Fix |
+|---|---|---|---|
+| 1 | Picking an unknown SKU throws `NullPointerException` | `int q = stock.get(sku)` unboxes the `null` that `get` returns | `stock.getOrDefault(sku, 0)` |
+| 2 | Bin 200 is not the same bin as bin 200 | `binA == binB` compares references, and 200 is not in the Integer cache | `Objects.equals(binA, binB)` |
+| 3 | Closing bin 3 closes the bin at index 3, or throws `IndexOutOfBoundsException` | `openBins.remove(binNumber)` with an `int` calls `remove(int index)` | `openBins.remove(Integer.valueOf(binNumber))` |
+| 4 | Sorting throws `Comparison method violates its general contract!` for some lists of 32 or more quantities | The hand-written comparator compares equal boxed values with `==`, so two equal 1000s do not compare as equal | `Comparator.naturalOrder()` |
+| 5 | The nightly total is slow (**performance only**: the result is already correct) | `Long total` is unboxed and reboxed on every iteration | `long total` |
 
 ### Key decisions
 

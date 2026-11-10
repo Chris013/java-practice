@@ -228,6 +228,16 @@ class OrderProcessorCharacterizationTest {
         }
 
         @Test
+        void a_declined_payment_does_not_use_up_a_number() {
+            Shop shop = new Shop();
+            shop.payments.declineNextCharges(1);
+            shop.processor.process(order("DE", null, item("TEA-GREEN", 1)));
+
+            assertThat(shop.processor.process(order("DE", null, item("TEA-GREEN", 1))))
+                    .isEqualTo("OK:ORD-20260301-0001");
+        }
+
+        @Test
         void each_processor_counts_on_its_own() {
             assertThat(new Shop().processor.process(order("DE", null, item("TEA-GREEN", 1))))
                     .isEqualTo("OK:ORD-20260301-0001");

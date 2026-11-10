@@ -10,7 +10,7 @@
 
 ## The situation
 
-`OrderProcessor` is the class behind the checkout page. Everything that happens when a customer presses "Buy" goes through its one method, `process`: input validation, country and shipping rules, coupons, totals, stock, payment, the order number, the database row and the confirmation mail. The class is about 180 lines, nearly all of it in that method, with nested `if`s, magic numbers and the same rounding written twice.
+`OrderProcessor` is the class behind the checkout page. Everything that happens when a customer presses "Buy" goes through its one method, `process`: input validation, country and shipping rules, coupons, totals, stock, payment, the order number, the database row and the confirmation mail. The class is about 180 lines, nearly all of it in that method, with nested `if`s, magic numbers and the same rounding repeated in every coupon branch.
 
 Years ago someone "made it testable" by putting every collaborator behind an interface. That was a good step, and it is the only part of the design that works well today. The logic is still inline. Every change to a coupon touches the same method as a change to the mail text, and nobody dares to touch either without a fear of breaking the other.
 
@@ -192,7 +192,7 @@ Some traps to watch for:
 * **The minimum subtotal of `FIVEOFF`** is checked against the subtotal, not against the total after shipping. `24.99` is refused, `25.00` is accepted.
 * **Free shipping is measured after the discount.** A basket of 55.56 with 10 % off is 50.00 and gets free shipping.
 * **Round in one place.** Money that is rounded at three different places can differ by a cent from the legacy total. In the solution that place is the `Money` constructor. It is safe because all inputs are already in cents.
-* **Counting.** The number goes up only for a placed order. If you assign it before the payment, the new-rules test for a declined card fails.
+* **Counting.** The number goes up only for a placed order. If you assign it before the payment, the characterization test for a declined card fails.
 * **Mocks that pin the old call order.** If you test the processor with a mock that checks "reserve, then charge, then save", you have pinned the legacy sequence and made the next change harder. Use the fakes and check the outcome: the stock levels, the saved orders, the mail.
 * **Fakes in pricing tests.** If the pricing phase needs a fake, something is still in the wrong place. Pricing takes numbers and returns numbers.
 
@@ -202,8 +202,8 @@ Thinking about the design: *A Philosophy of Software Design* ch. 9 asks whether 
 
 Run: `mvn test -Dtest='**/task24/**'`
 
-* `OrderProcessorCharacterizationTest`: 43 tests, green from the start and green after every step.
-* `OrderProcessorNewRulesTest`: 4 tests. Two of them fail on the starter. They must be green at the end.
+* `OrderProcessorCharacterizationTest`: 44 tests, green from the start and green after every step.
+* `OrderProcessorNewRulesTest`: 3 tests. Two of them fail on the starter. They must be green at the end.
 * The fakes (`FakeStock`, `FakePayments`, `RecordingMailer`, `InMemoryOrderStore`) and the test shop in `Shop` are helpers. Read them, do not change them unless you have a good reason.
 
 <details>
@@ -257,7 +257,7 @@ A string is an unchecked input that every method has to re-validate. Once a `Cou
 The checkout page needs `"ERR:..."`, but the core does not. If the core returned strings, every new rule would have to invent a string, and a typo would be a silent bug. The facade is one `switch`. The alternative was to change the page to the new result type at once. That is a big-bang change across two teams, so the facade stays until the page moves (stretch goal 1).
 
 **5. The order number is assigned after the charge.**
-The number is part of the order, and an order exists only after the payment succeeded. Assigning it earlier would make declined attempts consume numbers, and the characterization tests say that must not happen.
+The number is part of the order, and an order exists only after the payment succeeded. Assigning it earlier would make declined attempts consume numbers, and the characterization test `a_declined_payment_does_not_use_up_a_number` says that must not happen.
 
 **6. The bug fix is one line in the use case, after the split.**
 Once the reservation and the payment are separate steps in one method, "release on decline" is a single call in the `catch` block. Before the split it would have been the same call, but in the middle of 180 lines where nobody reads it. The structure is what makes the fix obvious and easy to review.

@@ -84,7 +84,7 @@ The given types [`SeatId`](../src/main/java/io/github/chris013/practice/task18/S
 | # | Where | Category | Symptom | Exposed by |
 |---|---|---|---|---|
 | 1 | `hold`: `isFree` then `holds.put` | Check-then-act | Two customers both get a hold on the same seat | `exactly_one_of_1000_customers_gets_a_seat_they_all_want` |
-| 2 | `confirm`: read the hold, then `sold.add` and `holds.remove` in separate steps | Check-then-act | A customer confirming from two threads buys the seat twice | `a_customer_who_confirms_the_same_hold_from_50_threads_buys_the_seat_once` |
+| 2 | `confirm`: read the hold, then `holds.remove`, `sold.add` and `soldCount++` in separate steps | Check-then-act | A customer confirming from two threads buys the seat twice | `a_customer_who_confirms_the_same_hold_from_50_threads_buys_the_seat_once` |
 | 3 | `soldCount++` | Lost update | The counter says 190 when 200 seats were sold | `no_sale_is_lost_when_200_customers_buy_200_different_seats_at_once` |
 | 4 | `sold` is a plain `ArrayList` written by many threads | Unsafe publication, lost update | Entries go missing, or the list gets corrupted | `no_sale_is_lost_when_200_customers_buy_200_different_seats_at_once` |
 | 5 | `soldSeats()` returns the internal list, not a copy | Leaking internal state | A caller iterating the list while a sale happens gets `ConcurrentModificationException`, and a list returned earlier changes under the caller | `iterating_the_sold_seats_while_another_thread_sells_does_not_throw`, `a_snapshot_taken_earlier_does_not_change_when_later_sales_happen` |
@@ -144,7 +144,7 @@ A test that wants 1,000 contenders needs 1,000 threads. A platform thread is a r
 
 **Option A: one global lock.** Put every method behind one `ReentrantLock` or one monitor, and call the listener after you release it. This is simple, obviously correct, and easy to review. It also serialises *everything*: a hold on seat 1 waits for a sale on seat 2. For one concert with a few thousand seats and a few hundred requests a second, that is fine. You should be able to say that out loud in a code review.
 
-**Option B: per-key atomicity.** Store the state of each seat in a `ConcurrentHashMap<SeatId, SeatState>`. Make each state change with `compute(seat, ...)`. The map guarantees that the function runs atomically for one key, and other keys are not blocked. The price is a rule: the function passed to `compute` must be short and must touch only that key. Calling the listener inside it is forbidden, both by the Javadoc and by common sense, because the listener may call back into the same map.
+**Option B: per-key atomicity.** Store the state of each seat in a `ConcurrentHashMap<SeatId, SeatState>`. Make each state change with `compute(seat, ...)`. The map guarantees that the function runs atomically for one key, and other keys are not blocked. The price is a rule: the function passed to `compute` must be short and must touch only that key. Calling the listener inside it is forbidden, both by the Javadoc and by common sense, because the listener may call back from another thread and touch the same key, which then waits for our `compute` to finish.
 
 Either option works. Pick one, write down why, and check that your choice never calls alien code inside the protected region.
 
@@ -165,7 +165,7 @@ Two test classes:
 * [`SeatReservationServiceTest`](../src/test/java/io/github/chris013/practice/task18/SeatReservationServiceTest.java) checks every rule with one thread. It passes on the starter, so it protects the *behaviour* while you change the *structure*.
 * [`SeatReservationConcurrencyTest`](../src/test/java/io/github/chris013/practice/task18/SeatReservationConcurrencyTest.java) checks the races. On the starter five of its six tests fail. The sixth (the listener that calls back) passes on the starter and must keep passing after your change, because it is the guard against the deadlock.
 
-Expected result on the starter: 19 tests pass and 5 of 6 concurrency tests fail. On the solution all 25 pass.
+On the starter 20 of 25 tests pass: all 19 in `SeatReservationServiceTest` and the callback test. The other 5 concurrency tests fail. On the solution all 25 pass.
 
 <details>
 <summary>Show the tests</summary>
@@ -212,13 +212,13 @@ Expected result on the starter: 19 tests pass and 5 of 6 concurrency tests fail.
 
 **2. The `compute` lambda decides, and we learn the decision by identity.** `hold` creates a candidate `HeldSeat` before calling `compute`. The lambda returns the candidate if the seat is available, otherwise it returns the current state unchanged. Afterwards `result != candidate` tells us whether we won. This avoids a mutable holder such as an `AtomicReference` or a one-element array. The alternative is perfectly fine too, and some teams find it clearer. The identity check is only correct because the candidate is a fresh object that nothing else can hold.
 
-**3. The listener is called after `compute` has returned.** This is the open call from *JCIP* 10.1. Inside `compute` we would hold the map's internal bin lock, and the listener may call `availableSeats()`, which reads the same map. Outside, nobody holds anything. The cost is that a listener can see a state that is already published but whose listener call has not happened yet. That is acceptable: the listener is a notification, not the source of truth.
+**3. The listener is called after `compute` has returned.** This is the open call from *JCIP* 10.1. Inside `compute` we hold the lock of that key's bin. A listener that calls `hold`, `confirm` or `release` for the same seat from another thread and waits for it deadlocks. Called on the same thread, `ConcurrentHashMap` may throw `IllegalStateException("Recursive update")`. The test's listener does exactly the first of these. Outside, nobody holds anything. The cost is that a listener can see a state that is already published but whose listener call has not happened yet. That is acceptable: the listener is a notification, not the source of truth.
 
 **4. One clock reading per operation, taken before `compute`.** `hold` reads `clock.instant()` once and uses that value for both the availability check and the new expiry. Reading the clock inside the lambda would also work, but the lambda is supposed to stay short, and the clock is alien code too. `availableSeats` takes one reading for the whole count, so all seats are judged at the same instant.
 
-**5. Sale order in a `ConcurrentLinkedQueue`, and snapshots by copy.** The queue is append-only, and its iterator is weakly consistent: it never throws `ConcurrentModificationException`. `soldSeats()` returns `List.copyOf(...)`, a frozen copy. `soldCount()` is the queue's size, so there is no separate counter to get out of step. A `synchronizedList` would not help: iterating it still needs the caller to hold its lock, which the caller does not know about.
+**5. Sale order in a `ConcurrentLinkedQueue`, and snapshots by copy.** The queue is append-only, and its iterator is weakly consistent: it never throws `ConcurrentModificationException`. `soldSeats()` returns `List.copyOf(...)`, a frozen copy. `soldCount()` reads an `AtomicInteger` that is incremented right after the queue add. Both are updated together after the winning `compute` and can briefly lag the seat map by one sale, which is acceptable for a display count. We do not use `ConcurrentLinkedQueue.size()` for it, because that walks the whole queue and its Javadoc says it is typically not very useful in concurrent code. A `synchronizedList` would not help: iterating it still needs the caller to hold its lock, which the caller does not know about.
 
-**6. `release` and `confirm` never touch another customer's state.** Both use `isHeldBy(state, customer, now)`, so the ownership rule is written once. `release` passes `now == null` to mean "ignore expiry": a customer may always drop their own hold, even if it expired a second ago.
+**6. `release` and `confirm` never touch another customer's state.** `release` uses `isHeldBy(state, customer)`, which ignores expiry: a customer may always drop their own hold, even if it expired a second ago. `confirm` uses `isValidHoldOf(state, customer, now)`, which also requires the hold to be active at `now`. Two small predicates, one per rule, so neither needs a magic "ignore expiry" value.
 
 **7. Why not one global lock?** It would have been correct, and it is a good answer in a code review. We chose per-key atomicity because the same design extends to many concerts and many venues without a bottleneck, and because the rule "never call alien code inside compute" is small enough to hold in one reviewed file. Stretch goal 2 asks you to measure this choice instead of trusting it.
 

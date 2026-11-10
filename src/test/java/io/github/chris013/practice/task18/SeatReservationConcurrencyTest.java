@@ -86,20 +86,23 @@ class SeatReservationConcurrencyTest {
 
         @Test
         void no_sale_is_lost_when_200_customers_buy_200_different_seats_at_once() throws Exception {
-            var service = new SeatReservationService(seats(200), new YieldingClock(START), HOLD,
-                    new RecordingReservationListener());
-            var sold = new AtomicInteger();
+            // 20 rounds, each with a fresh service: a lost update is a rare interleaving, so one round is not enough.
+            for (int round = 0; round < 20; round++) {
+                var service = new SeatReservationService(seats(200), new YieldingClock(START), HOLD,
+                        new RecordingReservationListener());
+                var sold = new AtomicInteger();
 
-            runConcurrently(200, i -> {
-                CustomerId customer = new CustomerId("customer-" + i);
-                if (service.hold(seat(i), customer).isPresent() && service.confirm(seat(i), customer)) {
-                    sold.incrementAndGet();
-                }
-            });
+                runConcurrently(200, i -> {
+                    CustomerId customer = new CustomerId("customer-" + i);
+                    if (service.hold(seat(i), customer).isPresent() && service.confirm(seat(i), customer)) {
+                        sold.incrementAndGet();
+                    }
+                });
 
-            assertThat(sold).hasValue(200);
-            assertThat(service.soldCount()).isEqualTo(200);
-            assertThat(service.soldSeats()).hasSize(200).doesNotHaveDuplicates();
+                assertThat(sold).as("round %d", round).hasValue(200);
+                assertThat(service.soldCount()).as("round %d", round).isEqualTo(200);
+                assertThat(service.soldSeats()).as("round %d", round).hasSize(200).doesNotHaveDuplicates();
+            }
         }
 
         @Test
@@ -176,7 +179,11 @@ class SeatReservationConcurrencyTest {
     @Nested
     class Callbacks {
 
-        /** Alien code: asks the service a question from another thread and waits for the answer. */
+        /**
+         * Alien code: from another thread it releases the sold seat (a {@code compute} on the same key) and asks for
+         * the available count, then waits for the answer. If {@code seatSold} ran inside {@code compute} for that key,
+         * the other thread would block on the key and this listener would wait forever.
+         */
         private static final class AskingListener implements ReservationListener {
 
             private final ExecutorService executor;
@@ -199,7 +206,11 @@ class SeatReservationConcurrencyTest {
             @Override
             public void seatSold(SeatId seat, CustomerId customer) {
                 try {
-                    seenAvailable.set(executor.submit(() -> service.availableSeats()).get());
+                    seenAvailable.set(executor.submit(() -> {
+                        // compute on the same key: blocks if the caller is inside compute for that key
+                        service.release(seat, new CustomerId("someone-else"));
+                        return service.availableSeats();
+                    }).get());
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("interrupted while asking the service", e);

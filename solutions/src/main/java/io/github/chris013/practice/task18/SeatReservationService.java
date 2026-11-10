@@ -11,6 +11,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Holds and sells seats for one concert. Customers hold a seat while paying, then confirm it.
@@ -36,6 +37,9 @@ public final class SeatReservationService {
 
     /** Sale order. Append-only, so iterating it while other threads sell is safe. */
     private final Queue<SeatId> soldInOrder = new ConcurrentLinkedQueue<>();
+
+    /** Kept next to the queue so {@link #soldCount()} does not walk the queue. Updated right after each sale. */
+    private final AtomicInteger soldCount = new AtomicInteger();
 
     public SeatReservationService(
             Set<SeatId> seats, Clock clock, Duration holdDuration, ReservationListener listener) {
@@ -74,11 +78,13 @@ public final class SeatReservationService {
         Instant now = clock.instant();
         SoldSeat candidate = new SoldSeat(customer);
 
-        SeatState result = states.compute(seat, (s, current) -> isHeldBy(current, customer, now) ? candidate : current);
+        SeatState result =
+                states.compute(seat, (s, current) -> isValidHoldOf(current, customer, now) ? candidate : current);
         if (result != candidate) {
             return false;
         }
         soldInOrder.add(seat);
+        soldCount.incrementAndGet();
         listener.seatSold(seat, customer);
         return true;
     }
@@ -87,7 +93,7 @@ public final class SeatReservationService {
     public void release(SeatId seat, CustomerId customer) {
         requireKnown(seat);
         Objects.requireNonNull(customer, "customer");
-        states.computeIfPresent(seat, (s, current) -> isHeldBy(current, customer, null) ? null : current);
+        states.computeIfPresent(seat, (s, current) -> isHeldBy(current, customer) ? null : current);
     }
 
     public int availableSeats() {
@@ -103,7 +109,7 @@ public final class SeatReservationService {
     }
 
     public int soldCount() {
-        return soldInOrder.size();
+        return soldCount.get();
     }
 
     /** A snapshot in sale order. Later sales do not change the returned list. */
@@ -119,11 +125,14 @@ public final class SeatReservationService {
         };
     }
 
-    /** {@code now == null} means "ignore expiry", which release uses: a customer may always drop their own hold. */
-    private static boolean isHeldBy(SeatState state, CustomerId customer, Instant now) {
-        return state instanceof HeldSeat held
-                && held.customer().equals(customer)
-                && (now == null || held.isActiveAt(now));
+    /** Any hold of this customer, expired or not. Used by release: a customer may always drop their own hold. */
+    private static boolean isHeldBy(SeatState state, CustomerId customer) {
+        return state instanceof HeldSeat held && held.customer().equals(customer);
+    }
+
+    /** A hold of this customer that is still active at {@code now}. Used by confirm. */
+    private static boolean isValidHoldOf(SeatState state, CustomerId customer, Instant now) {
+        return state instanceof HeldSeat held && held.customer().equals(customer) && held.isActiveAt(now);
     }
 
     private void requireKnown(SeatId seat) {

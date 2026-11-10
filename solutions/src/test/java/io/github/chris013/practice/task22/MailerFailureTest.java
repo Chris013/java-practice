@@ -34,6 +34,7 @@ class MailerFailureTest {
         Clock clock = Clock.fixed(Instant.parse("2026-11-09T10:00:00Z"), ZoneOffset.UTC);
         PasswordResetService service = new PasswordResetService(
                 users, tokens, () -> "token-1", new Sha256PasswordHasher(), mailer, clock);
+        // A throwing lambda would do the same. doThrow is shown because it is the Mockito form you will meet for void methods.
         doThrow(new IllegalStateException("SMTP server is down")).when(mailer).send(any(), any(), any());
 
         assertThatThrownBy(() -> service.requestReset(EMAIL))

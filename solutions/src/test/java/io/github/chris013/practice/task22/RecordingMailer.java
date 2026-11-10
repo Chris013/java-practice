@@ -7,7 +7,7 @@ import java.util.List;
  * A hand-written spy: it records every message, and the test reads the record afterwards.
  * That is usually all a mailer needs. No Mockito required.
  */
-final class FakeMailer implements Mailer {
+final class RecordingMailer implements Mailer {
 
     record SentMail(EmailAddress to, String subject, String body) {
     }

@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-import io.github.chris013.practice.task22.FakeMailer.SentMail;
+import io.github.chris013.practice.task22.RecordingMailer.SentMail;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -27,7 +27,7 @@ class PasswordResetServiceTest {
 
     private final InMemoryUsers users = new InMemoryUsers();
     private final InMemoryResetTokens tokens = new InMemoryResetTokens();
-    private final FakeMailer mailer = new FakeMailer();
+    private final RecordingMailer mailer = new RecordingMailer();
     private final MutableClock clock = new MutableClock(NOW);
     private final Sha256PasswordHasher hasher = new Sha256PasswordHasher();
     private final AtomicInteger issued = new AtomicInteger();
@@ -60,7 +60,9 @@ class PasswordResetServiceTest {
 
         @Test
         void unknown_email_sends_nothing_and_stores_nothing() {
-            // Mockito is justified here: "no mail was sent" is an outgoing call that either happens or not.
+            // Mockito is the clearer choice here, not the only one: verifyNoInteractions states "nothing was sent"
+            // in one line and keeps failing if Mailer later gains a second method. An empty recording-mailer
+            // list would prove the same today.
             Mailer outbox = mock(Mailer.class);
 
             serviceWith(outbox).requestReset(new EmailAddress("nobody@example.com"));

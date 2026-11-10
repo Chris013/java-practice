@@ -66,7 +66,7 @@ public final class PasswordResetService {
         }
         String token = generator.newToken();
         tokens.store(new ResetToken(Sha256.hex(token), userId, now.plus(TOKEN_LIFETIME)));
-        mailer.send(email, MAIL_SUBJECT, messageBody(token));
+        mailer.send(user.get().email(), MAIL_SUBJECT, messageBody(token));
     }
 
     /**

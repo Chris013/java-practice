@@ -86,7 +86,7 @@ Do the refactoring experiment described below, and write down what you saw in yo
 ## Constraints & non-goals
 
 * **Do not change `src/main`.** The production code is complete, and it is identical in the starter and the solution. If you think it is wrong, explain why in your PR description. The refactoring experiment is the one time you touch it, and you revert it.
-* **Do not mock what you do not need to mock.** Mockito is allowed. Use it where the requirement is an outgoing call that nothing else can observe, and add a comment that says why a fake would not do.
+* **Do not mock what you do not need to mock.** Mockito is allowed. Use it where the requirement is an outgoing call that nothing else can observe, and add a comment that says why a hand-written double would be less clear.
 * **Do not mock `Clock`.** Use `Clock.fixed` or a small `MutableClock`.
 * No `Thread.sleep` and no `Instant.now()`. The SHA-256 hasher that ships with the task is fast enough to use directly.
 * The whole task test run must stay well under 5 seconds.
@@ -101,9 +101,11 @@ Meszaros uses "test double" as the umbrella term. There are five kinds, and each
 |---|---|---|
 | **Dummy** | Is passed along to satisfy a parameter and is never used | The token store and the generator in a test of an unknown email. The service never touches them. |
 | **Stub** | Returns canned answers to calls, nothing more | A `TokenGenerator` that hands out predictable tokens (`token-1`, `token-2`), so the test knows the raw token. |
-| **Spy** | Records calls so that the test can read them afterwards | A `FakeMailer` that keeps every sent message in a list. |
-| **Mock** | Expects specific calls, and fails if they do not happen | `mock(Mailer.class)` in the unknown-email test, verified with `verifyNoInteractions`. |
+| **Spy** | Records calls so that the test can read them afterwards | A `RecordingMailer` that keeps every sent message in a list. |
+| **Mock** | Is told which calls to expect, and fails on a missing or an unexpected call | `mock(Mailer.class)` in the unknown-email test, verified with `verifyNoInteractions`. |
 | **Fake** | Has a real but simpler implementation of the dependency | `InMemoryUsers`, which saves and finds users like the real repository would. |
+
+Mockito blurs mock and spy: its mocks record every call and you verify afterwards. Strictly that is spy-style verification. The word "mock" in Mockito is the library's, not Meszaros's.
 
 The flowchart turns that into a decision. Read it top to bottom and stop at the first yes:
 
@@ -123,7 +125,9 @@ Two cases in this task deserve a second look. `PasswordHasher` is a pure functio
 
 ### Behaviour, not implementation
 
-Khorikov's first criterion for a good test is that it survives a refactoring that changes no observable behaviour. "Observable" means: what a caller of the service sees, and what the service leaves in its dependencies that someone else reads. The order of internal calls is not observable. The number of times the generator was called is not observable either, unless the generator is itself a visible side effect.
+Khorikov names four pillars of a good unit test, and he argues that one of them, resistance to refactoring, is not negotiable: a test must survive a refactoring that changes no observable behaviour. "Observable" means: what a caller of the service sees, and what the service leaves in its dependencies that someone else reads. The order of internal calls is not observable. The number of times the generator was called is not observable either, unless the generator is itself a visible side effect.
+
+Khorikov also separates *managed* dependencies, which are ours, such as our own database: they are an implementation detail, so use the real thing or a fake. *Unmanaged* dependencies, such as SMTP, are observable by the outside world, so we mock them. That is exactly why the two stores get fakes and the `Mailer` is the only legitimate mock target. Khorikov's rule is also never to assert interactions with stubs: `verify(users).findByEmail(EMAIL)` in the mockist test checks a call that only exists to feed the service its data.
 
 Try this experiment on your own machine. Do not commit it.
 
@@ -136,7 +140,7 @@ The mockist test failed because it tested the steps, not the result. The state-b
 
 ### Where mocks are justified
 
-A mock is a good choice when the requirement is an outgoing call that has no other trace. "Unknown emails send no mail" is such a rule: the only thing that changes is that the mailer receives nothing. A hand-written `FakeMailer` can also check that, by looking at its list. Both work. The reference suite uses a Mockito mock once, so you can see the form, and it explains why in a comment.
+A mock is a good choice when the requirement is an outgoing call that has no other trace. "Unknown emails send no mail" is such a rule: the only thing that changes is that the mailer receives nothing. A hand-written `RecordingMailer` can also check that, by looking at its list. Both work. The reference suite uses Mockito in two places, a mock for the unknown-email test and `doThrow` for the failing mailer, so you can see both forms, and each one explains in a comment why it is clearer than a hand-written double.
 
 `Clock` is different. It is a JDK type, it has one method that matters, and we do not own it. Mocking it means stubbing `instant()` in every test, and the test then reads like a clock setup instead of a business rule. The same goes for value objects such as `User` and `ResetToken`: there is nothing to isolate.
 
@@ -146,6 +150,7 @@ The service stores the token **before** it sends the mail. Think through both fa
 
 * Store, then send, and the mailer throws: the user gets no mail, but the token exists and counts against the limit of three for 30 minutes. Three failures in a row block the user for half an hour, and no mail is sent during that time.
 * Send, then store, and the store throws: the user gets a link that the service does not know. Clicking it gives "invalid token", and that is confusing, but nothing unsafe happens.
+* Whichever order you pick, a propagating exception is an oracle: a known email fails while the mail system is down, an unknown one never does. The endpoint must answer the same way in both cases (catch, log, return the generic "if an account exists, we sent a mail"), or the mail must go out asynchronously, as in stretch goal 2. A known email also does more work than an unknown one (it hashes, stores and mails), so a timing measurement can tell them apart too. That is a smaller leak, and fixing it is outside this task.
 
 Which order is right? Think about who the user is in each case, and what an attacker can do with each failure. Write your answer in your PR description. The reference suite pins the current order and explains the trade-off.
 
@@ -167,7 +172,7 @@ This task differs from the others. The production code is complete, so the start
 
 - [ ] `PasswordResetServiceStateTest` is green, and each numbered rule in "What I want from you" has at least one test.
 - [ ] No mock of a value object, of `Clock` or of `PasswordHasher`.
-- [ ] Every Mockito call in your suite has a comment that says why a fake would not do.
+- [ ] Every Mockito call in your suite has a comment that says why it is clearer than a hand-written double.
 - [ ] Boundaries are tested: one second before expiry, exactly at expiry, exactly 12 characters, the third and fourth token.
 - [ ] You ran the refactoring experiment, saw the mockist test fail, saw your suite stay green, and reverted it (`git diff src/main` is empty).
 - [ ] Your PR description says whether the mail-failure behaviour is right, and why.
@@ -194,11 +199,11 @@ This task differs from the others. The production code is complete, so the start
 
 **3. The real hasher.** `Sha256PasswordHasher` is deterministic and has no I/O, so there is nothing to isolate. The tests check that `hasher.matches` accepts the new password and rejects the old one. Asserting that `hash` was called would prove nothing about whether the user can log in.
 
-**4. Exactly one justified mock.** The unknown-email test uses `mock(Mailer.class)` and `verifyNoInteractions`. "No mail was sent" is the requirement, and a mock states it directly. The comment in the test says so. The other tests use `FakeMailer`, which records the mail so the test can read the link and the subject.
+**4. Mockito only where it states the requirement best.** The unknown-email test uses `mock(Mailer.class)` and `verifyNoInteractions`. "No mail was sent" is the requirement, and a mock states it directly. The comment in the test says so. The other tests use `RecordingMailer`, which records the mail so the test can read the link and the subject. `MailerFailureTest` uses `doThrow` for the one case where the mailer must fail; a throwing lambda would do the same, and the comment says so.
 
 **5. `MutableClock` instead of a mocked `Clock`.** The boundary tests move the clock with `advanceBy(LIFETIME)` and read as business sentences. A mocked `Clock` would need an `instant()` stub in every test.
 
-**6. Store first, then send, and the mail-failure behaviour pinned.** [`MailerFailureTest`](../solutions/src/test/java/io/github/chris013/practice/task22/MailerFailureTest.java) shows that the exception reaches the caller and the token remains in the store. The reason for this order is an invariant: every link that can be in a customer's mailbox is already in the store, so the service never mails a link it cannot honour. If the store write fails, nothing is mailed. The price is the lockout described in "How I'd approach it". A real fix, such as a retry or a transactional outbox, is outside this task.
+**6. Store first, then send, and the mail-failure behaviour pinned.** [`MailerFailureTest`](../solutions/src/test/java/io/github/chris013/practice/task22/MailerFailureTest.java) shows that the exception reaches the caller and the token remains in the store. The reason for this order is an invariant: every link that can be in a customer's mailbox is already in the store, so the service never mails a link it cannot honour. If the store write fails, nothing is mailed. The price is the lockout described in "How I'd approach it". The propagating exception is also an enumeration oracle, so pinning it is fine at service level only because the web layer must hide it. A real fix, such as a retry or a transactional outbox, is outside this task.
 
 ### Code
 
@@ -217,7 +222,7 @@ This task differs from the others. The production code is complete, so the start
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/InMemoryResetTokens.java -->
 <!-- /embed -->
 
-<!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/FakeMailer.java -->
+<!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/RecordingMailer.java -->
 <!-- /embed -->
 
 <!-- embed: solutions/src/test/java/io/github/chris013/practice/task22/MailerFailureTest.java -->
@@ -232,6 +237,7 @@ This task differs from the others. The production code is complete, so the start
 | `verifyNoMoreInteractions` on every collaborator | Every harmless new call, such as an extra read or a log line, breaks the test. Verify what the requirement needs. |
 | Mocking `Clock` | `Clock.fixed` or `MutableClock` is simpler, and stubbing `instant()` in each test is noise. |
 | `anyString()` everywhere in stubs | The test no longer says which token it is about, and a wrong lookup passes silently. |
+| Asserting only that the stored hash differs from the raw token | "isNotEqualTo(raw)" also passes for a reversed or Base64-encoded token. Check the format (64 lower-case hex characters) and that the raw token does not occur in it, as rule 3 says. |
 | Proving "only hashes are stored" with an `ArgumentCaptor` on `store` alone | The captor shows what was passed in, not what the store now holds. Read the store's contents after the call. |
 | Asserting on log calls | If you add logging, a test that checks log calls breaks when someone rewords a message. Logs are not behaviour that a customer sees. |
 

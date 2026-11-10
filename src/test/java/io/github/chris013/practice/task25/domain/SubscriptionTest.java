@@ -246,12 +246,24 @@ class SubscriptionTest {
         }
 
         @Test
-        void a_suspended_subscription_cannot_be_cancelled() {
+        void a_suspended_subscription_can_be_cancelled_and_ends_at_renewal() {
             Subscription subscription = subscription(Plan.TEAM);
             subscription.paymentFailed(APRIL_1);
             subscription.paymentFailed(APRIL_1.plusDays(14));
 
-            assertThatThrownBy(() -> subscription.cancelAtPeriodEnd(APRIL_14))
+            subscription.cancelAtPeriodEnd(APRIL_14);
+
+            assertThat(subscription.renew(MAY_1)).isEqualTo(new Ended());
+            assertThat(subscription.status()).isEqualTo(SubscriptionStatus.CANCELLED);
+        }
+
+        @Test
+        void a_cancelled_subscription_cannot_be_cancelled_again() {
+            Subscription subscription = subscription(Plan.TEAM);
+            subscription.cancelAtPeriodEnd(APRIL_14);
+            subscription.renew(MAY_1);
+
+            assertThatThrownBy(() -> subscription.cancelAtPeriodEnd(MAY_1))
                     .isInstanceOf(IllegalStateException.class);
         }
 

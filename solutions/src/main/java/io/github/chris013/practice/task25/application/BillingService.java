@@ -82,8 +82,10 @@ public final class BillingService {
     }
 
     /**
-     * The nightly job. Safe to run again after a crash: renewals whose invoice already exists are skipped, so
-     * nobody is charged twice. A subscription that is several periods behind gets one invoice per period.
+     * The nightly job. Safe to run again after a crash: a renewal whose invoice already exists is skipped, so
+     * nobody is charged twice. An invoice that was saved but never charged is skipped too and stays unpaid; the
+     * task's key decisions explain this gap. A subscription that is several periods behind gets one invoice per
+     * period.
      */
     public BillingRunReport runDailyBilling() {
         LocalDate today = today();

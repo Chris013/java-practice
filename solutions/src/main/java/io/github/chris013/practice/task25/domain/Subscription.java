@@ -95,8 +95,8 @@ public final class Subscription {
      */
     public void cancelAtPeriodEnd(LocalDate today) {
         Objects.requireNonNull(today, "today");
-        if (status != ACTIVE && status != PAST_DUE) {
-            throw new IllegalStateException("A %s subscription cannot be cancelled".formatted(status));
+        if (status == CANCELLED) {
+            throw new IllegalStateException("A cancelled subscription cannot be cancelled again");
         }
         requireInCurrentPeriod(today, "cancel");
         cancelAtPeriodEnd = true;

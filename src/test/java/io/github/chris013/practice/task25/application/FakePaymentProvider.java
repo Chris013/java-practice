@@ -18,6 +18,10 @@ final class FakePaymentProvider implements PaymentProvider {
         declining = true;
     }
 
+    void acceptEverything() {
+        declining = false;
+    }
+
     @Override
     public PaymentResult charge(CustomerId customerId, BigDecimal amount, InvoiceId reference) {
         charges.add(new Charge(customerId, amount, reference));

@@ -15,6 +15,7 @@ import io.github.chris013.practice.task25.domain.InvoiceId;
 import io.github.chris013.practice.task25.domain.InvoiceLine;
 import io.github.chris013.practice.task25.domain.Plan;
 import io.github.chris013.practice.task25.domain.Subscription;
+import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionReactivated;
 import io.github.chris013.practice.task25.domain.SubscriptionEvent.SubscriptionStarted;
 import io.github.chris013.practice.task25.domain.SubscriptionId;
 import io.github.chris013.practice.task25.domain.SubscriptionStatus;
@@ -244,6 +245,40 @@ class BillingServiceTest {
             assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.CANCELLED);
             assertThat(invoices.findBySubscription(id)).isEmpty();
             assertThat(billing.runDailyBilling()).isEqualTo(NOTHING_HAPPENED);
+        }
+    }
+
+    @Nested
+    class Dunning {
+
+        @Test
+        void a_paid_renewal_reactivates_a_past_due_subscription() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            payments.declineEverything();
+            billing.runDailyBilling();
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.PAST_DUE);
+
+            payments.acceptEverything();
+            clock.moveTo(JUNE_1);
+            billing.runDailyBilling();
+
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.ACTIVE);
+            assertThat(publisher.published()).anySatisfy(event ->
+                    assertThat(event).isInstanceOf(SubscriptionReactivated.class));
+        }
+
+        @Test
+        void a_second_declined_renewal_after_14_days_suspends() {
+            SubscriptionId id = billing.subscribe(ANNA, Plan.TEAM);
+            clock.moveTo(MAY_1);
+            payments.declineEverything();
+            billing.runDailyBilling();
+
+            clock.moveTo(JUNE_1);
+            billing.runDailyBilling();
+
+            assertThat(subscription(id).status()).isEqualTo(SubscriptionStatus.SUSPENDED);
         }
     }
 

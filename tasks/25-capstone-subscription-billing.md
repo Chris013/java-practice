@@ -4,7 +4,7 @@
 |---|---|---|
 | ⚫ Expert | Everything together: DDD aggregate with a lifecycle, value objects, domain events · Hexagonal architecture with ports and in-memory adapters · Money and proration math with exact rounding rules · Time with an injected `Clock` · Idempotent batch jobs · Sealed results | 6–8 h (a weekend) |
 
-> **Background reading:** everything from tasks 01 ([Money](01-money-value-object.md)), 08 (the `Order` aggregate), 10, 12 and 15 · Vernon, *Implementing Domain-Driven Design* (2013), ch. 10 "Aggregates" and ch. 14 "Application" · Stripe's public documentation on "Prorations" (for comparison; our rules are simpler and stated below) · *Effective Java* Item 17 ("Minimize mutability")
+> **Background reading:** everything from tasks 01 ([Money](01-money-value-object.md)), [08](08-order-aggregate.md) (the `Order` aggregate), [10](10-library-lending-hexagonal.md), [12](12-document-approval-type-state.md) and [15](15-gift-card-results.md) · Vernon, *Implementing Domain-Driven Design* (2013), ch. 10 "Aggregates" and ch. 14 "Application" · Stripe's public documentation on "Prorations" (for comparison; our rules are simpler and stated below) · *Effective Java* Item 17 ("Minimize mutability")
 
 ---
 
@@ -37,6 +37,8 @@ This task is the capstone. It asks you to combine ideas from the whole practice 
 | **Grace period** | 14 days after the first failed payment. |
 | **Idempotent run** | A job whose second run over the same data does nothing that the first run has not already done. |
 
+A word on month ends. `plusMonths` clamps 31 January to 28 February. `next()` starts from that end, so the next period runs 28 February to 28 March. The anchor day is lost, and the subscription bills on the 28th from then on (stretch: keep the anchor day).
+
 ### The status lifecycle
 
 ```mermaid
@@ -48,10 +50,11 @@ stateDiagram-v2
     SUSPENDED --> ACTIVE : payment succeeded
     ACTIVE --> CANCELLED : renewal with cancel flag set
     PAST_DUE --> CANCELLED : renewal with cancel flag set
+    SUSPENDED --> CANCELLED : renewal with cancel flag set
     CANCELLED --> [*]
 ```
 
-A subscription can only be cancelled while it is `ACTIVE` or `PAST_DUE`. Cancellation does not end the subscription on the spot. It sets a flag, and the next renewal turns the subscription into `CANCELLED`.
+A subscription can be cancelled in any status except `CANCELLED`; a customer who stopped paying must still be able to leave. Cancellation does not end the subscription on the spot. It sets a flag, and the next renewal turns the subscription into `CANCELLED`.
 
 ### An upgrade in the middle of a period
 
@@ -196,7 +199,7 @@ Implement the aggregate and the service. The domain types, the ports and the val
    * Not `ACTIVE`: `IllegalStateException`. Also `IllegalStateException` if `today` is on or after the end of the current period (renewal is due first).
    * **Upgrade** (the new plan is more expensive): takes effect now. Returns exactly two lines. The credit is `-(oldPrice × daysRemaining / periodDays)` and the charge is `newPrice × daysRemaining / periodDays`. Each is rounded HALF_UP to cents **separately**. The descriptions are `Unused time on TEAM (17 of 30 days)` and `Remaining time on BUSINESS (17 of 30 days)`. It clears any scheduled downgrade and records `PlanUpgraded`.
    * **Downgrade** (cheaper): is scheduled for the start of the next period, returns an empty list, and records `PlanChangeScheduled` dated at the period end. A second downgrade replaces the first.
-3. **`cancelAtPeriodEnd(today)`**: only when `ACTIVE` or `PAST_DUE`, otherwise `IllegalStateException`. Calling it again changes nothing. It sets a flag. It does not change the status.
+3. **`cancelAtPeriodEnd(today)`**: allowed while `ACTIVE`, `PAST_DUE` or `SUSPENDED`; `IllegalStateException` once `CANCELLED`. Also `IllegalStateException` if `today` is on or after the end of the current period (renewal is due first). Calling it again changes nothing. It sets a flag. It does not change the status.
 4. **`resume()`**: clears the cancel flag. Calling it when nothing is cancelled changes nothing. `IllegalStateException` if the subscription is `CANCELLED`.
 5. **`renew(today)`**:
    * `IllegalStateException` if the subscription is `CANCELLED`, or if `today` is before the end of the current period.
@@ -215,7 +218,7 @@ Implement the aggregate and the service. The domain types, the ports and the val
 11. **`cancel(id)`** on the service: `cancelAtPeriodEnd(today)`, save, publish.
 12. **`runDailyBilling()`**: for each subscription from `findDueForRenewal(today)`, renew while its period has ended. For each `Renewed` with lines:
     * if `existsFor(subscriptionId, newPeriodStart)` is true, count it as `skippedAlreadyInvoiced` and do nothing else;
-    * otherwise create an invoice **issued on the new period's first day**, save it, count it as `invoiced`, charge it, and call `paymentFailed` on a decline (counted as `paymentsFailed`).
+    * otherwise create an invoice **issued on the new period's first day**, save it, count it as `invoiced`, then charge it; `Declined` → `paymentFailed(today)` (counted as `paymentsFailed`), `Paid` → `paymentSucceeded()`.
 
     `Ended` is counted as `ended`. Every `Renewed` is counted as `renewed`, FREE ones included. After each subscription, save it and then publish its events.
 13. **`Invoice.total()`** is never below `0.00`. Credits larger than the charges give `0.00`.
@@ -229,7 +232,7 @@ Implement the aggregate and the service. The domain types, the ports and the val
 * **Billing rules live in `Subscription`**, not in the service. The service decides *when* to call, the aggregate decides *whether* and *what*.
 * **Nothing is charged at signup.** `subscribe` does not invoice the first period. Checkout does that outside this module. (Stretch goal 3 asks you to change that.)
 * **No dunning schedule.** The grace period is measured from the first failed charge. The next charge attempt happens with the next renewal, not on a retry timer.
-* **No taxes, no VAT, no currencies other than euro.** Task 13 covers taxes.
+* **No taxes, no VAT, no currencies other than euro.** [Task 13](13-receipt-enums.md) covers taxes.
 * **No persistence, no threads.** The in-memory adapters are single-threaded. Two nodes running the nightly job at once is a stretch goal.
 * A `FREE` subscription has no lines at renewal, and no proration credit, but it still gets its period moved and its events published.
 
@@ -239,7 +242,7 @@ Implement the aggregate and the service. The domain types, the ports and the val
 * **Reuse what you know.** Money arithmetic is the same kind of problem as task 01. The sealed `RenewalOutcome` and `PaymentResult` use the pattern-matching style of task 06. The events and the "record it, pull it, publish it" flow follow task 08's `Order`. The injected `Clock` is the one from task 07.
 * **Proration: multiply first, divide once.** `29.00 × 17 / 30` is exact in `BigDecimal` if you multiply before you divide. Then round the result once, HALF_UP. Do this for each line on its own. The worked example below shows why the difference matters.
 * **Think about the ordering in the service.** Ask yourself what happens if the process dies after each line. Where is the database write? Where is the charge? What does the rerun see? If the answer is "a second charge", you have the order wrong.
-* **Idempotency is about *what the rerun sees*, not about a flag.** The renewal invoice is recognised by its issue date. Think about why that is enough, and what could still go wrong. (The md's flags table lists one of those cases.)
+* **Idempotency is about *what the rerun sees*, not about a flag.** The renewal invoice is recognised by its issue date. Think about why that is enough, and what could still go wrong. (The flags table lists one of those cases.)
 * **Keep the aggregate's public surface small.** Anything you add beyond the contract above is a design decision you must justify.
 * **Test with the fakes.** `FakePaymentProvider` and `RecordingEventPublisher` are in `src/test`. `RecordingEventPublisher` also writes to a shared log, so you can check that the save came before the publish.
 
@@ -296,9 +299,9 @@ The tests are in three places. [`BillingPeriodTest`](../src/test/java/io/github/
 ## Stretch goals
 
 1. **Carry credit forward.** A credit larger than the charges should not vanish. Keep the leftover as a balance on the subscription and apply it to the next invoice. Where does the balance live, in the aggregate or in a separate `Account`? Why?
-2. **Undo a scheduled downgrade.** Right now, asking for the plan you already have is an error, even when a downgrade is pending. Make the request clear the pending downgrade. Which rule does this change, and how do the tests need to change?
-3. **Bill the first period at signup.** Add an invoice in `subscribe` for the first period. What happens when that charge is declined? Is the subscription `PAST_DUE` from day one, or does it not start at all?
-4. **Two nodes, one nightly job.** Two copies of the job start at midnight. Which rule keeps them from charging the same renewal twice, the idempotency check or a lock? Link your answer to tasks 11 and 18. Can both protections fail at once?
+2. **Yearly plans.** Add a yearly billing interval. What does `BillingPeriod.monthStartingOn` become, and how does proration change for a 365-day period?
+3. **Bill the first period at signup.** Add an invoice in `subscribe` for the first period. What happens when that charge is declined? Is the subscription `PAST_DUE` from day one, or does it not start at all? If the signup invoice also covers taxes, see [Task 13](13-receipt-enums.md).
+4. **Two nodes, one nightly job.** Two copies of the job start at midnight. Which rule keeps them from charging the same renewal twice, the idempotency check or a lock? Link your answer to tasks [11](11-token-bucket-rate-limiter.md) and [18](18-seat-reservation-races.md). Can both protections fail at once?
 5. **Event-sourced subscription.** Store the events, not the state, and rebuild the subscription from them. Which of the rules in this task become harder to write, and which get easier?
 
 ---
@@ -316,9 +319,9 @@ The tests are in three places. [`BillingPeriodTest`](../src/test/java/io/github/
 
 **3. Money is multiply-then-divide, rounded once per line.** `prorated` multiplies the price by the days, divides by the period length with HALF_UP to two decimals, and the credit is negated afterwards. There are no doubles anywhere. The rejected alternative was to compute the difference once and round the total. That gives 28.33 where the printed lines add up to 28.34.
 
-**4. The invoice is saved before it is charged.** If the process dies after the save, a rerun finds the invoice and does not charge again. If it dies after the charge, the invoice is already saved. The rejected order, charge then save, risks a second charge on rerun. The price of this order is that an invoice can exist without a payment, which is why the flags table lists it.
+**4. The invoice is saved before it is charged.** If the process dies after the save, a rerun finds the invoice and does not charge again. If it dies between the save and the charge, the invoice stays unpaid. This task accepts that gap. Stretch goal 4 and the flags table come back to it. If it dies after the charge, the invoice is already saved. The rejected order, charge then save, risks a second charge on rerun. The price of this order is that an invoice can exist without a payment, which is why the flags table lists it.
 
-**5. A renewal invoice is recognised by its issue date.** Renewal invoices are issued on the first day of the period they bill, so `existsFor(subscription, periodStart)` is a complete check. Upgrade invoices use the day of the change, so they never collide with a period start in practice. The rejected alternative was a separate "billed periods" table. It is more explicit, but a second source of truth to keep in step.
+**5. A renewal invoice is recognised by its issue date.** Renewal invoices are issued on the first day of the period they bill, so `existsFor(subscription, periodStart)` is a complete check. An upgrade invoice can share a date with a period start, but only after that period's renewal has run, because `changePlan` refuses while a renewal is due. The check depends on that rule. A catch-up renewal is also backdated: the May invoice of a job that runs on 1 June says issued 1 May. A production system would put the billed period on the invoice (with an invoice kind, so proration invoices do not match) and a unique key on (subscription, period start). The rejected alternative was a separate "billed periods" table. It is more explicit, but a second source of truth to keep in step.
 
 **6. Sealed results instead of exceptions for the normal outcomes.** `RenewalOutcome` (`Renewed` or `Ended`) and `PaymentResult` (`Paid` or `Declined`) are values, because a declined card or a cancelled subscription is normal business. The service matches them with an exhaustive `switch`. Exceptions remain for bugs: a renewal before it is due, a change to a cancelled subscription.
 
@@ -350,6 +353,7 @@ The tests are in three places. [`BillingPeriodTest`](../src/test/java/io/github/
 | Billing rules in the service, such as `if status PAST_DUE then ...` | The rule is copied into every caller. The next caller forgets one branch and suspends a customer who has paid. |
 | Publishing events before the save | A listener reacts to a change that the database then rejects. The listener and the database now disagree. |
 | A non-idempotent nightly job (charge, then save, with no check) | A crash after the charge and before the save charges the same customer again on the rerun. |
+| Skipping an invoice that exists but was never charged | A crash between the invoice save and the charge leaves an unpaid invoice that the rerun skips forever. Real systems store an invoice status (OPEN or PAID) and let a collector retry OPEN invoices. |
 | A mutable `BillingPeriod`, or a `List` that the caller can change | The period of a stored subscription changes under the aggregate's feet. Records, `List.copyOf` and no setters keep the state safe. |
 | Resetting the grace period on every failure | A card that fails every day never reaches the 14-day limit, so the customer is never suspended. |
 

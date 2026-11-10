@@ -39,6 +39,14 @@ class BillingPeriodTest {
             assertThat(BillingPeriod.monthStartingOn(APRIL_1).next())
                     .isEqualTo(new BillingPeriod(MAY_1, JUNE_1));
         }
+
+        @Test
+        void a_period_that_started_on_the_31st_keeps_billing_on_the_28th() {
+            BillingPeriod january = BillingPeriod.monthStartingOn(LocalDate.of(2026, 1, 31));
+
+            assertThat(january.next())
+                    .isEqualTo(new BillingPeriod(LocalDate.of(2026, 2, 28), LocalDate.of(2026, 3, 28)));
+        }
     }
 
     @Nested

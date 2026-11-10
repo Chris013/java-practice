@@ -242,7 +242,7 @@ The simplifier tests have one nested group per rule, a group for formulas that c
 | Mutable nodes with `setLeft` or `setOperand` | Rewriting a shared tree in place changes formulas that other views still show. Records make the bottom-up rebuild safe. |
 | One giant method with `instanceof` chains | No exhaustiveness check, and the rules are mixed together. Put one rule per case. |
 | Simplifying top-down once | `x * 1` inside `+ 0` is only visible after the inner node is simplified. Top-down misses the rules that depend on simplified children. |
-| A rule that grows the tree, such as `x` to `x + 0` | The fixed-point loop never ends. Every rule has to shrink the tree or keep its size. |
+| A rule that grows the tree, such as `x` to `x + 0` | The fixed-point loop never ends. Every rule has to make measurable progress: fewer nodes, or (like `x + x`) fewer `Add` nodes without more nodes. |
 | Parentheses around every compound child | The output is unreadable, which is the reason the printer exists. Parenthesize by precedence. |
 | `double` for the arithmetic | `0.1 + 0.2` is not `0.3`, and large integers round silently. Use `long` with the `*Exact` methods. |
 | `Math.multiplyExact` missing in the power loop | An overflow wraps around and returns a wrong, possibly negative, result without any error. |

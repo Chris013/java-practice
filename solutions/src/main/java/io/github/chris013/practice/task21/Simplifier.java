@@ -78,7 +78,7 @@ public final class Simplifier {
     private static Expr power(Pow pow) {
         return switch (pow) {
             case Pow(Num(long base), int exponent) -> Expr.num(Evaluator.exactPower(base, exponent));
-            case Pow(Expr x, int exponent) when exponent == 0 -> Expr.num(1);
+            case Pow(_, int exponent) when exponent == 0 -> Expr.num(1);
             case Pow(Expr x, int exponent) when exponent == 1 -> x;
             case Pow p -> p;
         };

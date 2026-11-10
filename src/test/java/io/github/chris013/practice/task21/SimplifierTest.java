@@ -52,12 +52,6 @@ class SimplifierTest {
         void a_negation_that_does_not_fit_throws() {
             assertThatThrownBy(() -> simplify(neg(num(Long.MIN_VALUE)))).isInstanceOf(ArithmeticException.class);
         }
-
-        @Test
-        void a_grouped_constant_that_does_not_fit_throws() {
-            assertThatThrownBy(() -> simplify(mul(num(Long.MAX_VALUE), mul(num(2), X))))
-                    .isInstanceOf(ArithmeticException.class);
-        }
     }
 
     @Nested
@@ -131,6 +125,12 @@ class SimplifierTest {
         void a_constant_on_the_right_is_not_moved_to_the_left() {
             // No commutative reordering: the simplifier only knows the rules listed in the task.
             assertThat(simplify(mul(num(2), mul(X, num(3))))).isEqualTo(mul(num(2), mul(X, num(3))));
+        }
+
+        @Test
+        void a_grouped_constant_that_does_not_fit_throws() {
+            assertThatThrownBy(() -> simplify(mul(num(Long.MAX_VALUE), mul(num(2), X))))
+                    .isInstanceOf(ArithmeticException.class);
         }
     }
 

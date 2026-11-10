@@ -99,7 +99,7 @@ Notice what the domain side does **not** have: no `TYP` code, no `"P"` or `"F"`,
 | `PLZ` | `Address.postalCode` | 5 digits for DE, 4 for AT and CH, checked by `Address`. |
 | `LAND` | `Address.country` | Known names and codes map to `DE`, `AT`, `CH`. Empty means DE. |
 | `STATUS` | `CustomerStatus` | `A` ACTIVE, `I` INACTIVE, `G` BLOCKED. |
-| `GEBDAT` | `birthDate` | `dd.MM.yyyy` strictly, `00.00.0000` or empty means unknown. Ignored for `F`. |
+| `GEBDAT` | `birthDate` | `dd.MM.uuuu` strictly, `00.00.0000` or empty means unknown. Ignored for `F`. |
 | `EMAIL` | `email` | Split on `;`, first valid address wins, junk is ignored. |
 | `KREDITLIMIT` | `creditLimit` | German format `1.234,56` as `BigDecimal` with scale 2. Empty means 0.00. |
 
@@ -147,9 +147,9 @@ Implement the directory and its translator. The domain types, the CRM types and 
 * **Exception translation** (*Effective Java* Item 73). The CRM's `CrmException` is an infrastructure detail. Callers of the port should see `CustomerDirectoryUnavailableException`, which says what happened in our language. Do not throw away the cause: the CRM error code and the stack trace are what the on-call engineer needs.
 * **Why junk e-mails are ignored and a junk PLZ is corruption.** This is a business decision, and you should be able to defend it. A customer without an e-mail address can still get the loyalty newsletter by post. A customer without a valid postal code cannot receive a parcel. Ask yourself: "is this record usable?" If the answer is no, it is corrupt.
 * **Why the translator is package-private.** The only public face of the ACL is the port implementation. If another class could call `toDomain` directly with a record it got from somewhere else, it would skip the exception translation and the port's contract. Keep the surface as small as possible.
-* **German numbers.** `NumberFormat.getInstance(Locale.GERMAN).parse("1.234,56abc")` succeeds and returns 1234.56: it stops at the first character it does not understand. For money, use a strict regex that must match the whole string, or `ParsePosition` and check that the whole string was consumed.
-* **Dates.** `DateTimeFormatter` with `ResolverStyle.STRICT` rejects `31.02.1980`. `LENIENT` rolls it over to 02.03.1980 (1980 is a leap year), and `SMART` clamps it to 29.02.1980. Only `STRICT` rejects it. Read the Javadoc of `ResolverStyle` before you choose.
-* **The `Optional` boundary.** `Optional` is good as a return type and as a record component that means "may be absent" (`birthDate`). It is bad as a field, a parameter, or inside a collection. Your translator returns `Optional`; it does not take one.
+* **German numbers.** `NumberFormat.getInstance(Locale.GERMAN).parse("1.234,56abc")` succeeds and returns 1234.56: it stops at the first character it does not understand. For money, use a strict regex that must match the whole string. (Outside this task, `NumberFormat` with a `ParsePosition` that you check consumed the whole string is the other safe option.)
+* **Dates.** `DateTimeFormatter` with `ResolverStyle.STRICT` rejects `31.02.1980`. `LENIENT` rolls it over to 02.03.1980 (1980 is a leap year), and `SMART` clamps it to 29.02.1980. Only `STRICT` rejects it. Read the Javadoc of `ResolverStyle` before you choose. Use `uuuu`, not `yyyy`: under `STRICT`, `yyyy` is year-of-era, and without an era in the pattern even `31.12.1980` is rejected.
+* **The `Optional` boundary.** `Optional` is good as a return type and as a record component that means "may be absent" (`birthDate`). It is bad as a field, a parameter, or inside a collection. The directory returns `Optional`, and the translator's helpers may too; none of them takes one as a parameter.
 * **Where the ACL lives.** In hexagonal terms (ports and adapters, covered in [task 10](10-library-lending-hexagonal.md) of this series) the `CustomerDirectory` interface is a port that belongs to the loyalty context. The ACL is an adapter: it implements that port and points outwards to the CRM. The dependency arrow points inwards, from the adapter to the domain, and never from the domain to the CRM.
 * `Stream.flatMap(Optional::stream)` (Java 9+) turns a stream of optionals into a stream of values. It is a good fit for "first valid e-mail".
 
@@ -177,7 +177,7 @@ Run: `mvn test -Dtest='**/task20/**'`
 
 - [ ] All tests green, and the whole task test run takes well under a second.
 - [ ] `CrmCustomerTranslator` is package-private, and `CrmCustomerRecord` appears nowhere outside `acl`.
-- [ ] Every corrupt value throws `CorruptCustomerDataException` with the right legacy field name. No other exception type comes out of `findById`.
+- [ ] Every corrupt value throws `CorruptCustomerDataException` with the right legacy field name; no `IllegalArgumentException` or `DateTimeParseException` escapes `findById`.
 - [ ] Every `CrmException` becomes a `CustomerDirectoryUnavailableException` with the original as its cause.
 - [ ] No `Double`, no lenient date parsing, no `NumberFormat`.
 - [ ] The domain types are unchanged, and no CRM knowledge is in them.

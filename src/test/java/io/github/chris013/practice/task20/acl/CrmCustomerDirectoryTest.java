@@ -67,6 +67,20 @@ class CrmCustomerDirectoryTest {
         }
 
         @Test
+        void trims_the_coded_fields_too() {
+            CrmRecords record = aPrivateCustomerRecord()
+                    .with("TYP", " P ").with("STATUS", " G ").with("LAND", " AT ").with("PLZ", "1010")
+                    .with("GEBDAT", " 31.12.1980 ").with("KREDITLIMIT", " 1.234,56 ");
+
+            assertThat(lookupOrFail(record)).isInstanceOfSatisfying(PrivateCustomer.class, p -> {
+                assertThat(p.status()).isEqualTo(CustomerStatus.BLOCKED);
+                assertThat(p.address().country()).isEqualTo(Country.AT);
+                assertThat(p.birthDate()).contains(LocalDate.of(1980, 12, 31));
+                assertThat(p.creditLimit().toPlainString()).isEqualTo("1234.56");
+            });
+        }
+
+        @Test
         void treats_a_null_legacy_field_as_blank() {
             CrmRecords record = aPrivateCustomerRecord().with("EMAIL", null).with("KREDITLIMIT", null);
 

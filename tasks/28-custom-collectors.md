@@ -36,9 +36,11 @@ flowchart TD
     Split --> C1[Chunk 1: supplier then accumulator]
     Split --> C2[Chunk 2: supplier then accumulator]
     Split --> C3[Chunk 3: supplier then accumulator]
+    Split --> C4[Chunk 4: supplier then accumulator]
     C1 --> M1[Combiner: chunk 1 with chunk 2]
     C2 --> M1
-    C3 --> M2[Combiner: left over with chunk 3]
+    C3 --> M2[Combiner: chunk 3 with chunk 4]
+    C4 --> M2
     M1 --> M3[Combiner: final merge]
     M2 --> M3
     M3 --> F[Finisher turns the partial result into R]
@@ -129,7 +131,7 @@ Every collector gives the same result sequentially and in parallel.
 ## How I'd approach it
 
 * **Start with `topK`.** It is the smallest, and it shows the shape of every collector: a supplier, an accumulator, a combiner, and a finisher. Write the sequential version first, then add the combiner, then run the parallel test.
-* **Why `reduce` with a mutable container is wrong.** `stream.reduce(new ArrayList<>(), (list, x) -> { list.add(x); return list; }, combiner)` shares one `ArrayList` between every chunk, so the parallel run races on it. Even with a fresh container per chunk, `reduce` requires the identity to be a true identity: `combine(identity, x)` must equal `x`. A mutable container breaks that, because the combiner is then allowed to mutate its argument. `Collector` exists for exactly this case: a supplier creates a fresh container for every chunk.
+* **Why `reduce` with a mutable container is wrong.** `stream.reduce(new ArrayList<>(), (list, x) -> { list.add(x); return list; }, combiner)` shares one `ArrayList` between every chunk, so the parallel run races on it. Even with a fresh container per chunk, `reduce` passes the same identity object to every chunk. With a mutable container, every chunk's accumulator mutates that one shared object. `reduce` is designed for immutable values, where the accumulator returns a new value. `collect` with a `Collector` is the mutable-reduction counterpart: its supplier creates a fresh container for every chunk.
 * **The two constraints from the `Collector` Javadoc.** The supplier's container must be an identity for the combiner: merging an empty container into any partial result leaves that result unchanged. And the combiner must be associative: `combine(combine(a, b), c)` must equal `combine(a, combine(b, c))`. Parallel streams choose the tree of merges themselves, so you must not depend on it.
 * **Characteristics.** `IDENTITY_FINISH` means the finisher is a plain cast, so `A` and `R` are the same type. Use it only when that is true. `UNORDERED` means the result does not depend on the encounter order. `CONCURRENT` means one shared container is updated by several threads, so the accumulator must be thread-safe. It is rarely what you want: a thread-safe container is harder to get right and usually slower than one container per chunk. The usual exception is grouping into a `ConcurrentHashMap`.
 * **When parallel streams help.** They help when the source splits cheaply (an `ArrayList`, an array, `IntStream.range`), the work per element is CPU-bound and not trivial, and the combine step is cheap. They hurt on small inputs, on sources that split badly (`LinkedList`, `Stream.iterate`, a stream of lines from a socket), and in a server, where the shared common pool is used by other requests too. *Effective Java* Item 48 gives the same advice.
@@ -141,7 +143,7 @@ mean  = mean + delta / n
 m2    = m2 + delta * (x - mean)
 ```
 
-  The population variance is `m2 / n`. The key is the second line: `x - mean` is computed from the old mean, and the update never forms `x*x`. Subtracting two nearly equal sums is what breaks the textbook formula, so this method avoids it.
+  The population variance is `m2 / n`. The key is the third line. It multiplies `delta`, the distance from the old mean, by `x - mean`, the distance from the new mean. Both are small numbers, so the update never forms `x*x` and never subtracts two large, nearly equal sums.
 
 * **Chan's merge.** Two partial results A and B, with `n = nA + nB`:
 
@@ -151,7 +153,7 @@ mean  = meanA + delta * nB / n
 m2    = m2A + m2B + delta * delta * nA * nB / n
 ```
 
-  An empty part must be handled first. It has no mean, so its contribution to `mean` is undefined. Your merge needs an explicit check.
+  Guard the empty cases explicitly. If both parts are empty, `n` is 0 and `nB / n` is `0 / 0`, which is NaN. If only one part is empty, the formulas happen to give the other part, but an early return is clearer and does not depend on that.
 * **Min and max** are easy to forget in the merge. They are not in the formulas above, and a merge that only updates `count`, `mean` and `m2` gives wrong answers silently.
 * **Worked example: why the textbook formula fails.** Take the four values `1e9 + 4`, `1e9 + 7`, `1e9 + 13` and `1e9 + 16`. Their true mean is `1e9 + 10`, and their true variance is `22.5`. A double has about 16 significant digits, so the squares are about `1e18` and each one is rounded to a multiple of 128.
 
@@ -203,7 +205,7 @@ Run: `mvn test -Dtest='**/task28/**'`
 - [ ] `statisticsPerSensor()` is built from `groupingBy`, `statistics()` and `collectingAndThen`, with no hand-written supplier or accumulator.
 - [ ] `countAbove` always has both keys, and a NaN threshold is rejected.
 - [ ] No shared mutable state outside the accumulation containers.
-- [ ] Your PR description says why `IDENTITY_FINISH` and `CONCURRENT` are not set on the statistics collector, and whether `UNORDERED` is safe.
+- [ ] The Javadoc of `statistics()` says why `IDENTITY_FINISH` and `CONCURRENT` are not set, and whether `UNORDERED` is safe.
 
 ## Stretch goals
 

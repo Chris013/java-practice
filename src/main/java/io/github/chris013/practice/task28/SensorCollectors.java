@@ -15,7 +15,6 @@ import java.util.stream.Collector;
 public final class SensorCollectors {
 
     private SensorCollectors() {
-        throw new UnsupportedOperationException("TODO: Task 28");
     }
 
     /**

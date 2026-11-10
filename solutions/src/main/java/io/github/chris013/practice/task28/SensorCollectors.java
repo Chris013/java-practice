@@ -22,11 +22,13 @@ import java.util.stream.Collectors;
 public final class SensorCollectors {
 
     private SensorCollectors() {
-        throw new AssertionError("No instances");
     }
 
     /**
      * Count, min, max, mean and population standard deviation in one pass, numerically stable.
+     *
+     * <p>Empty input gives {@link Optional#empty()}. A single reading gives a standard deviation of {@code 0}.
+     * The result must be the same sequentially and in parallel, within floating-point tolerance.
      *
      * <p>The accumulator is a {@link RunningStatistics} that uses Welford's online update, not the sums of
      * {@code x} and {@code x*x}. The combiner uses Chan et al.'s merge, so two halves computed in parallel give the
@@ -58,6 +60,11 @@ public final class SensorCollectors {
      *
      * <p>The parameter is {@code Comparator<? super T>} (PECS: the comparator consumes the elements), so you can pass
      * a {@code Comparator<Object>} to rank Strings.
+     *
+     * <p>If the input has fewer than {@code k} elements, all of them are returned. Which of several equal elements
+     * is kept at the cut-off is unspecified.
+     *
+     * @throws IllegalArgumentException if {@code k} is less than 1
      */
     public static <T> Collector<T, ?, List<T>> topK(int k, Comparator<? super T> order) {
         if (k < 1) {
@@ -76,7 +83,7 @@ public final class SensorCollectors {
      * Statistics per sensor. The per-sensor collector is an ordinary composition: {@code groupingBy} with a
      * {@code TreeMap} so keys are sorted, {@link #statistics()} as the downstream collector, and
      * {@code collectingAndThen} to take the value out of the {@code Optional} and make the map unmodifiable.
-     * A group always has at least one reading, so {@code orElseThrow} cannot fail.
+     * A group always has at least one reading, so {@code orElseThrow} cannot fail. Empty input gives an empty map.
      */
     public static Collector<Reading, ?, SortedMap<String, Statistics>> statisticsPerSensor() {
         Collector<Reading, ?, Statistics> oneSensor =
@@ -90,6 +97,8 @@ public final class SensorCollectors {
      * Counts with {@link Collectors#partitioningBy partitioningBy}, which always creates both keys.
      * A reading equal to the threshold is not above it. A NaN threshold would make every comparison false
      * without any error, so it is rejected up front.
+     *
+     * @throws IllegalArgumentException if the threshold is NaN or infinite
      */
     public static Collector<Reading, ?, Map<Boolean, Long>> countAbove(double thresholdCelsius) {
         if (!Double.isFinite(thresholdCelsius)) {

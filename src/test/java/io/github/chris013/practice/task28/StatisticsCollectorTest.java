@@ -9,7 +9,6 @@ import static org.assertj.core.api.Assertions.within;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collector;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -70,7 +69,7 @@ class StatisticsCollectorTest {
             // be 22.5, comes out as -128, so sqrt returns NaN.
             double naive = naiveStandardDeviation(NEAR_A_BILLION);
 
-            assertThat(Double.isNaN(naive) || Math.abs(naive - Math.sqrt(22.5)) > 1.0).isTrue();
+            assertThat(naive).isNaN();
         }
 
         /** The formula most people write first. Kept here only to show that it is wrong. */
@@ -114,7 +113,8 @@ class StatisticsCollectorTest {
         @Test
         void merging_two_empty_halves_gives_no_statistics() {
             assertThat(collectInTwoHalves(SensorCollectors.statistics(), List.of(), List.of())).isEmpty();
-        }    }
+        }
+    }
 
     @Nested
     class Parallel {

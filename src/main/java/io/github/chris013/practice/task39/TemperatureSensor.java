@@ -9,8 +9,10 @@ package io.github.chris013.practice.task39;
  */
 public interface TemperatureSensor {
 
+    /** Stable identifier of the sensor. */
     String id();
 
+    /** Current temperature in degrees Celsius. May change between calls, so callers must not cache it. */
     double readCelsius();
 
     /** Fahrenheit is derived from Celsius unless the implementation has a native Fahrenheit reading. */
@@ -28,6 +30,8 @@ public interface TemperatureSensor {
      *
      * <p>The result reads through to this sensor on every call. A snapshot would silently stop following
      * the hardware after the first call.
+     *
+     * @throws IllegalArgumentException if {@code offsetCelsius} is NaN or infinite
      */
     default TemperatureSensor calibrated(double offsetCelsius) {
         throw new UnsupportedOperationException("TODO: Task 39");

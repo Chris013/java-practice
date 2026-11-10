@@ -1,6 +1,7 @@
 package io.github.chris013.practice.task39;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 import org.junit.jupiter.api.Nested;
@@ -60,6 +61,15 @@ class ResolutionRulesTest {
             RoomSensor sensor = new RoomSensor("t-7", "Kitchen", TemperatureSensor.fixed("t-7", 19.0));
 
             assertThat(sensor.label()).isEqualTo("Kitchen (Sensor t-7)");
+        }
+
+        @Test
+        void a_room_sensor_rejects_null_arguments() {
+            TemperatureSensor source = TemperatureSensor.fixed("t-7", 19.0);
+
+            assertThatThrownBy(() -> new RoomSensor(null, "Kitchen", source)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new RoomSensor("t-7", null, source)).isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> new RoomSensor("t-7", "Kitchen", null)).isInstanceOf(NullPointerException.class);
         }
 
         @Test

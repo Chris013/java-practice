@@ -9,8 +9,10 @@ import java.util.Objects;
  */
 public interface TemperatureSensor {
 
+    /** Stable identifier of the sensor. */
     String id();
 
+    /** Current temperature in degrees Celsius. May change between calls, so callers must not cache it. */
     double readCelsius();
 
     /** Fahrenheit is derived from Celsius unless the implementation has a native Fahrenheit reading. */
@@ -28,10 +30,12 @@ public interface TemperatureSensor {
      *
      * <p>The result reads through to this sensor on every call. A snapshot would silently stop following
      * the hardware after the first call.
+     *
+     * @throws IllegalArgumentException if {@code offsetCelsius} is NaN or infinite
      */
     default TemperatureSensor calibrated(double offsetCelsius) {
-        if (Double.isNaN(offsetCelsius)) {
-            throw new IllegalArgumentException("offsetCelsius must be a number");
+        if (!Double.isFinite(offsetCelsius)) {
+            throw new IllegalArgumentException("offsetCelsius must be finite");
         }
         TemperatureSensor source = this;
         return new TemperatureSensor() {
@@ -57,6 +61,16 @@ public interface TemperatureSensor {
         if (id.isBlank()) {
             throw new IllegalArgumentException("id must not be blank");
         }
-        return new SimulatedSensor(id, () -> celsius);
+        return new TemperatureSensor() {
+            @Override
+            public String id() {
+                return id;
+            }
+
+            @Override
+            public double readCelsius() {
+                return celsius;
+            }
+        };
     }
 }

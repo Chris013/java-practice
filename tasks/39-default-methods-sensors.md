@@ -150,7 +150,7 @@ Implement the evolution of `TemperatureSensor` and the three classes that show t
    * `default boolean isFreezing()`: `readCelsius() <= 0.0`. The boundary is inclusive.
    * `default TemperatureSensor calibrated(double offsetCelsius)`: returns a sensor with the **same id** whose `readCelsius()` is this sensor's reading plus the offset. It **reads through** on every call. It is not a snapshot.
    * `static TemperatureSensor fixed(String id, double celsius)`: a sensor that always reports the same value. A `null` id gives `NullPointerException`, a blank id gives `IllegalArgumentException`.
-   * `calibrated` rejects a `NaN` offset with `IllegalArgumentException`.
+   * `calibrated` rejects a non-finite offset (`NaN` or infinity) with `IllegalArgumentException`.
 2. **[`RoomSensor`](../src/main/java/io/github/chris013/practice/task39/RoomSensor.java)** `(String id, String room, TemperatureSensor source)` implements `TemperatureSensor`, `Labelled` and `Located`.
    * Its readings come from `source`.
    * It **overrides `label()`** and returns `room + " (" + Labelled.super.label() + ")"`, so a room `Kitchen` with sensor `t-7` gets the label `Kitchen (Sensor t-7)`. Without the override the code does not compile.
@@ -227,7 +227,7 @@ Run: `mvn test -Dtest='**/task39/**'`
 
 **1. Defaults for everything that can be derived, abstract only for what must come from the implementer.** `id()` and `readCelsius()` stay abstract because no interface can know them. `readFahrenheit()` and `isFreezing()` are computed from `readCelsius()`. Making them abstract would force every adapter to add two methods it does not need. The alternative, a separate `FahrenheitSensor` interface, splits the concept in two for no benefit.
 
-**2. `calibrated` returns an anonymous class that captures `this`.** The source is captured in a local variable named `source`, because inside the anonymous class `this` means the anonymous class itself. Each call to `readCelsius()` calls the source again, so the result always reflects the current hardware. The rejected alternative, `new SimulatedSensor(id(), () -> readCelsius() + offset)`, works too, but it ties the interface to a class in the test-helper family.
+**2. `calibrated` returns an anonymous class that captures `this`.** The source is captured in a local variable named `source`, because inside the anonymous class `this` means the anonymous class itself. Each call to `readCelsius()` calls the source again, so the result always reflects the current hardware. The rejected alternative, `new SimulatedSensor(id(), () -> readCelsius() + offset)`, works too, but then the published interface would depend on one of its own implementers, a cycle: interface, `SimulatedSensor`, `AbstractTemperatureSensor`, interface.
 
 **3. `RoomSensor` picks the label explicitly.** It overrides `label()` and calls `Labelled.super.label()`. The compiler gives no default winner here because neither interface is more specific than the other. Writing the choice down in code means the next reader does not have to guess.
 
@@ -235,7 +235,7 @@ Run: `mvn test -Dtest='**/task39/**'`
 
 **5. Equality uses `getClass()`, not `instanceof`.** With `instanceof`, a subclass that adds state and overrides `equals` can make `a.equals(b)` true while `b.equals(a)` is false. Comparing exact classes keeps the relation symmetric, and it is simple to explain. The cost is that a subclass is never equal to its parent, which is the behaviour we want for sensors.
 
-**6. `fixed` validates the id and builds a `SimulatedSensor`.** The method does not need its own class: a constant supplier is a simulated sensor that always returns the same number.
+**6. `fixed` validates the id and returns a tiny anonymous class.** A constant sensor needs no named class, and for the same reason as in decision 2 the interface does not depend on any implementer. The JDK does the same: `List.of` returns instances of hidden classes, not of a public `List` implementation.
 
 ### Code
 

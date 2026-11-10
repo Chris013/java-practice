@@ -71,11 +71,12 @@ class TemperatureSensorTest {
             assertThat(sensor.readFahrenheit()).isCloseTo(31.1, within(1e-9));
         }
 
-        @Test
-        void rejects_a_nan_offset() {
+        @ParameterizedTest
+        @ValueSource(doubles = {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY})
+        void rejects_an_offset_that_is_not_finite(double offset) {
             TemperatureSensor sensor = TemperatureSensor.fixed("t-1", 20.0);
 
-            assertThatThrownBy(() -> sensor.calibrated(Double.NaN)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> sensor.calibrated(offset)).isInstanceOf(IllegalArgumentException.class);
         }
     }
 

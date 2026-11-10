@@ -215,7 +215,7 @@ class QuoteAggregatorTest {
             Hanging hanging = FakeProvider.hanging("Stuck");
             AtomicReference<InterruptedException> thrown = new AtomicReference<>();
             try (var aggregator = new QuoteAggregator(List.of(hanging), Duration.ofSeconds(10))) {
-                Thread caller = new Thread(() -> {
+                Thread caller = Thread.ofVirtual().start(() -> {
                     try {
                         aggregator.quotesFor(REQUEST);
                     } catch (InterruptedException e) {
@@ -223,12 +223,10 @@ class QuoteAggregatorTest {
                     }
                 });
 
-                caller.start();
                 assertThat(hanging.awaitStarted(Duration.ofSeconds(1))).isTrue();
                 caller.interrupt();
-                caller.join(Duration.ofSeconds(2).toMillis());
 
-                assertThat(caller.isAlive()).isFalse();
+                assertThat(caller.join(Duration.ofSeconds(2))).isTrue();
                 assertThat(thrown.get()).isInstanceOf(InterruptedException.class);
                 assertThat(hanging.awaitInterrupted(Duration.ofSeconds(1))).isTrue();
             }
@@ -242,20 +240,27 @@ class QuoteAggregatorTest {
         void close_interrupts_a_search_that_is_still_running() throws Exception {
             Hanging hanging = FakeProvider.hanging("Stuck");
             var aggregator = new QuoteAggregator(List.of(hanging), Duration.ofSeconds(10));
-            Thread caller = Thread.ofVirtual().start(() -> {
-                try {
-                    aggregator.quotesFor(REQUEST);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            });
-            assertThat(hanging.awaitStarted(Duration.ofSeconds(1))).isTrue();
+            try {
+                AtomicReference<AggregatedQuotes> result = new AtomicReference<>();
+                Thread caller = Thread.ofVirtual().start(() -> {
+                    try {
+                        result.set(aggregator.quotesFor(REQUEST));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                });
+                assertThat(hanging.awaitStarted(Duration.ofSeconds(1))).isTrue();
 
-            Thread closer = Thread.ofVirtual().start(aggregator::close);
+                Thread closer = Thread.ofVirtual().start(aggregator::close);
 
-            assertThat(hanging.awaitInterrupted(Duration.ofSeconds(1))).isTrue();
-            assertThat(closer.join(Duration.ofSeconds(1))).isTrue();
-            assertThat(caller.join(Duration.ofSeconds(1))).isTrue();
+                assertThat(hanging.awaitInterrupted(Duration.ofSeconds(1))).isTrue();
+                assertThat(closer.join(Duration.ofSeconds(1))).isTrue();
+                assertThat(caller.join(Duration.ofSeconds(1))).isTrue();
+                assertThat(result.get().failures())
+                        .containsExactly(new ProviderFailure("Stuck", Reason.ERROR, "InterruptedException"));
+            } finally {
+                aggregator.close(); // closing twice is harmless
+            }
         }
     }
 

@@ -82,7 +82,7 @@ Implement [`QuoteAggregator`](../src/main/java/io/github/chris013/practice/task2
    * A provider that throws an `Error` makes `quotesFor` rethrow it.
    * A `null` request is a `NullPointerException`.
    * If the calling thread is interrupted while it waits, the method throws `InterruptedException`.
-3. **`close()`** shuts the executor down, so no virtual thread outlives the aggregator.
+3. **`close()`** shuts the executor down, so no virtual thread outlives the aggregator. A search that is still running when `close()` is called reports the interrupted providers as `ERROR` with detail `InterruptedException`.
 4. The result is an [`AggregatedQuotes`](../src/main/java/io/github/chris013/practice/task23/AggregatedQuotes.java) (given). Its quotes are sorted by price, then provider name, then flight number. Its failures are sorted by provider name. `cheapest()` is empty when there are no quotes. `isComplete()` is true when there are no failures.
 5. [`TripRequest`](../src/main/java/io/github/chris013/practice/task23/TripRequest.java) and [`Quote`](../src/main/java/io/github/chris013/practice/task23/Quote.java) (given) validate their input. Their rules are tested too, so you can see the boundaries.
 
@@ -213,7 +213,7 @@ try (var scope = StructuredTaskScope.open(joiner, cf -> cf.withTimeout(budget)))
 // joiner.finished holds SUCCESS/FAILED subtasks; every provider not in it is a TIMEOUT
 ```
 
-The structure is attractive. The scope owns the threads, so they cannot outlive it, and the deadline is a property of the scope. It is still a preview API in JDK 25, and it changes between previews. With JDK 25's timeout, unfinished subtasks end up `UNAVAILABLE`, and `Subtask.get()` cannot be used for partial results after a timeout. That is why the joiner collects the finished subtasks itself. It is one more reason to wait for the API to become final. That is why we use `invokeAll`, which is stable.
+The structure is attractive. The scope owns the threads, so they cannot outlive it, and the deadline is a property of the scope. It is still a preview API in JDK 25, and it changes between previews. With JDK 25's timeout, unfinished subtasks end up `UNAVAILABLE`, and `Subtask.get()` cannot be used for partial results after a timeout. That is why the joiner collects the finished subtasks itself. It is one more reason to wait for the API to become final, and to use the stable `invokeAll` today.
 
 ### What I typically flag in first attempts
 

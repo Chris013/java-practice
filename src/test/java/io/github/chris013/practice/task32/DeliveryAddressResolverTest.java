@@ -3,8 +3,8 @@ package io.github.chris013.practice.task32;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.HashSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -39,11 +39,25 @@ class DeliveryAddressResolverTest {
         @Test
         void rejects_null_collaborators() {
             assertThatThrownBy(() -> new DeliveryAddressResolver(null, pickupPoints, DELIVERABLE))
-                    .isInstanceOf(NullPointerException.class);
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("customers");
             assertThatThrownBy(() -> new DeliveryAddressResolver(customers, null, DELIVERABLE))
-                    .isInstanceOf(NullPointerException.class);
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("pickupPoints");
             assertThatThrownBy(() -> new DeliveryAddressResolver(customers, pickupPoints, null))
-                    .isInstanceOf(NullPointerException.class);
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessage("deliverableCountries");
+        }
+
+        @Test
+        void copies_the_deliverable_countries() {
+            Set<String> countries = new HashSet<>(Set.of("DE"));
+            customers.with(customer(BEN, FOREIGN_HOME, null));
+            DeliveryAddressResolver resolver = new DeliveryAddressResolver(customers, pickupPoints, countries);
+
+            countries.add("FR");
+
+            assertThat(resolver.resolve(BEN)).isEmpty();
         }
 
         @Test
@@ -61,14 +75,6 @@ class DeliveryAddressResolverTest {
             pickupPoints.with(new PickupPoint("PP-1", PICKUP, true));
 
             assertThat(resolver().resolve(ANNA)).contains(PICKUP);
-        }
-
-        @Test
-        void prefers_the_pickup_point_over_the_home_address() {
-            customers.with(customer(ANNA, HOME, "PP-1"));
-            pickupPoints.with(new PickupPoint("PP-1", PICKUP, true));
-
-            assertThat(resolver().resolve(ANNA)).isNotEqualTo(Optional.of(HOME));
         }
 
         @Test
@@ -217,6 +223,25 @@ class DeliveryAddressResolverTest {
             customers.with(customer(BEN, HOME, null));
 
             resolver().resolveOrThrow(BEN);
+
+            assertThat(customers.lookups()).isEqualTo(1);
+        }
+
+        @Test
+        void resolve_or_throw_looks_up_the_customer_exactly_once_when_nothing_resolves() {
+            customers.with(customer(BEN, FOREIGN_HOME, null));
+
+            assertThatThrownBy(() -> resolver().resolveOrThrow(BEN))
+                    .isInstanceOf(NoDeliveryAddressException.class);
+
+            assertThat(customers.lookups()).isEqualTo(1);
+        }
+
+        @Test
+        void delivery_city_looks_up_the_customer_exactly_once_when_nothing_resolves() {
+            customers.with(customer(BEN, FOREIGN_HOME, null));
+
+            assertThat(resolver().deliveryCity(BEN)).isEqualTo("unknown");
 
             assertThat(customers.lookups()).isEqualTo(1);
         }

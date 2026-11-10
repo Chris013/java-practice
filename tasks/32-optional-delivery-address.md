@@ -95,6 +95,10 @@ classDiagram
         +String city
         +String countryCode
     }
+    class CustomerId {
+        +String value
+    }
+    class NoDeliveryAddressException
     class DeliveryAddressResolver {
         -CustomerDirectory customers
         -PickupPointDirectory pickupPoints
@@ -110,6 +114,9 @@ classDiagram
     PickupPointDirectory ..> PickupPoint : returns
     Customer --> Address : home
     PickupPoint --> Address : located at
+    Customer --> CustomerId
+    CustomerDirectory ..> CustomerId : takes
+    DeliveryAddressResolver ..> NoDeliveryAddressException : throws
 ```
 
 Two rules shape the code. The **directories** return `Optional` because "not found" is a normal answer. The **`Customer` fields** are plain nullable fields, because a customer with no home address is ordinary data, not a question that every caller must ask.
@@ -154,7 +161,7 @@ Implement [`DeliveryAddressResolver`](../src/main/java/io/github/chris013/practi
 ## How I'd approach it
 
 * **Start with the customer lookup.** `customers.find(id)` returns an `Optional<Customer>`. Your next step should be a `flatMap` on that result, not a `map`. Why? You will see in a moment.
-* **`map` vs `flatMap`.** `map(f)` wraps the result of `f` in an `Optional`. If `f` already returns an `Optional`, you get `Optional<Optional<T>>`. That is almost never what you want. `flatMap(f)` expects `f` to return an `Optional` and gives you back one level. Look at `preferredPickupPointId().flatMap(pickupPoints::find)`: the id is an `Optional<String>`, and `find` returns an `Optional<PickupPoint>`. `map` would give you `Optional<Optional<PickupPoint>>`.
+* **`map` vs `flatMap`.** `map(f)` wraps the result of `f` in an `Optional`. If `f` already returns an `Optional`, you get `Optional<Optional<T>>`. That is almost never what you want. `flatMap(f)` expects `f` to return an `Optional` and gives you back one level. The pickup id is an `Optional<String>`, and the directory's `find` returns an `Optional<PickupPoint>`. Which of the two keeps the result one level deep?
 * **`filter` for the business rules.** `filter(PickupPoint::open)` keeps the value only when the predicate holds, and turns it into an empty `Optional` otherwise. A rule like "open and deliverable" reads as a chain of `filter` calls.
 * **`or` is for the fallback.** `a.or(() -> b)` returns `a` when it has a value and otherwise the `Optional` supplied by `b`. Java 9 added it. The supplier is only called when it is needed. That is the whole point of the fallback: the home address is only looked at when the pickup point did not work out.
 * **`orElse` versus `orElseGet`.** `orElse(x)` evaluates `x` **before** the call, even when the `Optional` has a value. If `x` is a method call with cost or side effects, it runs anyway. `orElseGet(() -> x)` runs the supplier only when the value is missing. Use `orElse` for constants, like `"unknown"`, and `orElseGet` or `orElseThrow` with a supplier for anything else.
@@ -224,9 +231,9 @@ Run: `mvn test -Dtest='**/task32/**'`
 
 **2. The pickup lookup sits inside the `flatMap` lambda.** The pickup id is an `Optional<String>`, so `flatMap(pickupPoints::find)` only calls the directory when the id is present. The laziness rule is then a property of the code's shape, not something the reader has to check.
 
-**3. `or` for the fallback, not `orElse`.** `preferredPickupAddress(customer).or(() -> home)` evaluates the home-address rule only when the pickup rule has no answer. With `orElse(homeAddress())` the home lookup and its country check would run every time, even when the pickup point was perfect.
+**3. `or` for the fallback, not `orElse`.** `preferredPickupAddress(customer).or(() -> home)` evaluates the home-address rule only when the pickup rule has no answer. The rejected alternative computes both candidates up front and then picks one; then the home rule runs every time, even when the pickup point was perfect. Here the home rule is cheap, but the shape matters: as soon as a fallback costs something (a second directory, a remote call), the eager version pays for it on every call. `or` takes a supplier, so the fallback only runs when it is needed.
 
-**4. Nullable fields in `Customer`, `Optional` only at the accessor.** The alternative was `Optional` fields. Rejected: each customer would carry two extra wrapper objects, the class is not `Serializable`, and nothing gets safer. Wrapping at the accessor gives callers the same type-level promise, and the class stays simple.
+**4. Nullable fields in `Customer`, `Optional` only at the accessor.** The alternative was `Optional` fields. Rejected: each customer would carry two extra wrapper objects, `Optional` is not `Serializable` (so an `Optional` field would block serializing `Customer` later), and nothing gets safer. Wrapping at the accessor gives callers the same type-level promise, and the class stays simple.
 
 **5. `resolveAll` uses `flatMap(Optional::stream)`.** This keeps the input order, skips the empty results and needs no `if`. `toList()` returns an unmodifiable list, which is what the caller should get.
 

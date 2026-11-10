@@ -158,6 +158,12 @@ class PromotionsTest {
             assertThat(threeForTwo.evaluate(basket)).isEmpty();
         }
 
+        @Test
+        void gives_nothing_when_the_unit_price_is_zero() {
+            Basket basket = Basket.of(List.of(line(PASTA, Category.PASTA, "0.00", 3)));
+            assertThat(threeForTwo.evaluate(basket)).isEmpty();
+        }
+
         @ParameterizedTest
         @CsvSource({"2, 2", "3, 0", "2, 3"})
         void rejects_a_deal_where_buy_is_not_more_than_pay_or_pay_is_below_one(int buy, int pay) {
@@ -214,7 +220,7 @@ class PromotionsTest {
 
         @ParameterizedTest
         @CsvSource({"20.00, 0.00", "-1.00, 5.00", "20.00, 5.001", "20.001, 5.00"})
-        void rejects_a_negative_threshold_or_an_amount_that_is_not_a_positive_cent_value(String threshold, String amountOff) {
+        void rejects_a_negative_threshold_a_non_positive_amount_or_more_than_two_decimals(String threshold, String amountOff) {
             assertThatThrownBy(() -> new SpendAndSave("Bad", new BigDecimal(threshold), new BigDecimal(amountOff)))
                     .isInstanceOf(IllegalArgumentException.class);
         }

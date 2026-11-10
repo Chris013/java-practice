@@ -4,7 +4,7 @@
 |---|---|---|
 | 🟢 Easy | Streams on sorted data: `takeWhile` and `dropWhile` · `flatMap` · `Stream.iterate` with a predicate · `partitioningBy` · `LongSummaryStatistics` · side-effect-free stream functions | 1–1.5 h |
 
-> **Background reading:** *Modern Java in Action* ch. 4 ("Introducing streams"), ch. 5 ("Working with streams": slicing with `takeWhile`/`dropWhile`, mapping with `flatMap`, finding and matching, numeric streams, building streams), ch. 6 ("Collecting data": partitioning) · *Effective Java* 3rd ed. Item 45 ("Use streams judiciously"), Item 46 ("Prefer side-effect-free functions in streams"), Item 47 ("Prefer `Collection` to `Stream` as a return type")
+> **Background reading:** *Modern Java in Action* ch. 4 ("Introducing streams"), ch. 5 ("Working with streams": slicing with `takeWhile`/`dropWhile`, mapping with `flatMap`, finding and matching, numeric streams, building streams), ch. 6 ("Collecting data with streams": partitioning) · *Effective Java* 3rd ed. Item 45 ("Use streams judiciously"), Item 46 ("Prefer side-effect-free functions in streams"), Item 47 ("Prefer `Collection` to `Stream` as a return type")
 
 ---
 
@@ -96,17 +96,6 @@ Implement [`AccessLog`](../src/main/java/io/github/chris013/practice/task36/Acce
 | `for` loop that returns the first 5xx, else `Optional.empty()` | `filter(LogEntry::isServerError).findFirst()` |
 
 * **The parsing contract is strict on purpose.** `LogEntry.parse` splits on single spaces, so a double space makes a field empty and the line is rejected. That is what the tests check. A tolerant parser would hide a broken log export, and the ops team would only find out from wrong numbers. Strictness is cheaper to debug than silent bad data.
-
-## Flags I'll raise in review
-
-| Smell | What to do instead |
-|---|---|
-| `filter` on sorted data where `takeWhile` would stop early | Use `dropWhile` then `takeWhile`, and keep the sortedness check in `of` |
-| `takeWhile` on data that is not known to be sorted | Check the order once, in `of`, and document the assumption |
-| `forEach` that calls `add` on an outer list | Use `collect` or `toList()` |
-| `map(...)` followed by `flatMap` that gives `Stream<Stream<...>>` | Use `flatMap` alone, with a function that returns a `Stream` |
-| `map(LogEntry::durationMs)` followed by a sum | Use `mapToLong` so the values stay primitive |
-| A getter that returns a `Stream` | Return an immutable `List` or `Set` |
 
 ## Tests
 

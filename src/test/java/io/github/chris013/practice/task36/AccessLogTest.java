@@ -218,6 +218,15 @@ class AccessLogTest {
             assertThat(day.partitionByError().get(false)).hasSize(8);
         }
 
+        @ParameterizedTest(name = "status {0} is an error: {1}")
+        @CsvSource({"399, false", "400, true", "599, true"})
+        void partitions_at_the_400_boundary(int status, boolean error) {
+            AccessLog log = AccessLog.of(List.of(entry("14:00:00", status)));
+
+            assertThat(log.partitionByError().get(error)).hasSize(1);
+            assertThat(log.partitionByError().get(!error)).isEmpty();
+        }
+
         @Test
         void both_partition_keys_exist_even_without_errors() {
             AccessLog log = AccessLog.of(List.of(entry("14:00:00", 200)));
